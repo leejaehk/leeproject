@@ -6,6 +6,8 @@ import matplotlib.animation as animation
 import random
 import math
 import time
+import json
+import os
 from collections import deque
 
 # ================================================================
@@ -14,6 +16,8 @@ from collections import deque
 # import serial
 # ser = serial.Serial('COM3', 115200, timeout=1)
 # ================================================================
+
+SAVE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sound_data.json")
 
 MAX_POINTS = 60
 
@@ -41,11 +45,61 @@ def fake_sound(t, offset=0):
     spike = random.random() * 80 if random.random() < 0.05 else 0
     return max(0, min(255, int(base + noise + spike)))
 
+# ── 저장 / 불러오기 ────────────────────────────────────
+def save_data():
+    save = {
+        "thresholds": thresholds,
+        "spaces": [
+            {
+                "name": s["name"],
+                "channel": s["channel"],
+                "peak": s["peak"],
+                "peak_time": s["peak_time"],
+                "total": s["total"],
+                "count": s["count"],
+                "offset": s["offset"],
+                "peaks_log": s["peaks_log"][:20],
+            }
+            for s in spaces
+        ]
+    }
+    with open(SAVE_FILE, "w", encoding="utf-8") as f:
+        json.dump(save, f, ensure_ascii=False, indent=2)
+
+def load_data():
+    global thresholds, spaces
+    if not os.path.exists(SAVE_FILE):
+        return
+    try:
+        with open(SAVE_FILE, "r", encoding="utf-8") as f:
+            save = json.load(f)
+        thresholds = save.get("thresholds", [50, 100, 150, 200])
+        loaded = save.get("spaces", [])
+        if loaded:
+            spaces = []
+            for s in loaded:
+                spaces.append({
+                    "name": s["name"],
+                    "channel": s["channel"],
+                    "data": deque([0]*MAX_POINTS, maxlen=MAX_POINTS),
+                    "peak": s["peak"],
+                    "peak_time": s["peak_time"],
+                    "total": s["total"],
+                    "count": s["count"],
+                    "window_peak": 0,
+                    "peaks_log": s["peaks_log"],
+                    "offset": s["offset"],
+                })
+    except Exception:
+        pass
+
 # ── 공간 데이터 ─────────────────────────────────────────
 spaces = [
     {"name": "공간 1", "channel": 1, "data": deque([0]*MAX_POINTS, maxlen=MAX_POINTS),
-     "peak": 0, "total": 0, "count": 0, "window_peak": 0, "peaks_log": [], "offset": 0},
+     "peak": 0, "total": 0, "count": 0, "window_peak": 0, "peaks_log": [], "offset": 0, "peak_time": "—"},
 ]
+
+load_data()  # 저장된 데이터 불러오기
 
 running = True
 tick = 0
@@ -64,6 +118,32 @@ BG        = "#f5f5f3"
 CARD      = "#ffffff"
 GRAY      = "#888780"
 BORDER    = "#D3D1C7"
+
+# ── 마이크로비트 개수 입력 ──────────────────────────────
+while True:
+    try:
+        mb_count = simpledialog.askinteger(
+            "마이크로비트 개수",
+            "사용할 마이크로비트 총 개수를 입력하세요.\n(수신용 1개 포함, 최소 2개)",
+            parent=root, minvalue=1, maxvalue=10
+        )
+        if mb_count is None:
+            mb_count = 2
+            break
+        if mb_count < 2:
+            messagebox.showwarning(
+                "개수 부족",
+                "마이크로비트는 최소 2개가 필요해요.\n"
+                "수신용 1개 + 소리 감지용 1개 이상이어야 해요.\n"
+                "다시 입력해주세요."
+            )
+            continue
+        break
+    except Exception:
+        mb_count = 2
+        break
+
+MAX_SPACES = mb_count - 1  # 수신용 1개 제외
 
 # ── 상단 타이틀 바 ──────────────────────────────────────
 top = tk.Frame(root, bg=BG, pady=8, padx=16)
@@ -88,7 +168,8 @@ def reset_all():
     for s in spaces:
         s["data"].extend([0]*MAX_POINTS)
         s["peak"] = 0; s["total"] = 0; s["count"] = 0
-        s["window_peak"] = 0; s["peaks_log"] = []
+        s["window_peak"] = 0; s["peaks_log"] = []; s["peak_time"] = "—"
+    save_data()
     refresh_detail()
 
 btn_toggle = tk.Button(top, text="  일시정지  ", font=FONT, bg="#E6F1FB", fg="#185FA5",
@@ -107,10 +188,15 @@ space_mgr.pack(fill="x", padx=16, pady=(4,0))
 space_top = tk.Frame(space_mgr, bg=CARD)
 space_top.pack(fill="x")
 tk.Label(space_top, text="공간 관리", font=FONT, bg=CARD, fg=GRAY).pack(side="left")
+space_limit_lbl = tk.Label(space_top, text=f"현재 {len(spaces)}개 / 최대 {MAX_SPACES}개", font=FONT, bg=CARD, fg=GRAY)
+space_limit_lbl.pack(side="left", padx=12)
+
+def update_limit_label():
+    space_limit_lbl.config(text=f"현재 {len(spaces)}개 / 최대 {MAX_SPACES}개")
 
 def add_space():
-    if len(spaces) >= 4:
-        messagebox.showwarning("최대 4개", "공간은 최대 4개까지 추가할 수 있어요.")
+    if len(spaces) >= MAX_SPACES:
+        messagebox.showwarning(f"최대 {MAX_SPACES}개", f"공간은 최대 {MAX_SPACES}개까지 추가할 수 있어요.")
         return
     name = simpledialog.askstring("공간 추가", "공간 이름 입력:", parent=root)
     if not name:
@@ -120,10 +206,11 @@ def add_space():
         "name": name, "channel": ch,
         "data": deque([0]*MAX_POINTS, maxlen=MAX_POINTS),
         "peak": 0, "total": 0, "count": 0,
-        "window_peak": 0, "peaks_log": [], "offset": random.randint(0, 100)
+        "window_peak": 0, "peaks_log": [], "offset": random.randint(0, 100), "peak_time": "—"
     })
     refresh_space_buttons()
     refresh_overview()
+    update_limit_label()
 
 def delete_space():
     global selected_space
@@ -135,6 +222,7 @@ def delete_space():
     refresh_space_buttons()
     refresh_overview()
     refresh_detail()
+    update_limit_label()
 
 def rename_space():
     name = simpledialog.askstring("공간 이름 변경",
@@ -145,6 +233,28 @@ def rename_space():
         refresh_space_buttons()
         refresh_overview()
 
+def change_mb_count():
+    global MAX_SPACES
+    while True:
+        new_count = simpledialog.askinteger(
+            "마이크로비트 개수 변경",
+            f"현재 마이크로비트 총 개수: {MAX_SPACES + 1}개\n새 개수를 입력하세요. (수신용 1개 포함, 최소 2개)",
+            parent=root, minvalue=1, maxvalue=10
+        )
+        if new_count is None:
+            return
+        if new_count < 2:
+            messagebox.showwarning(
+                "개수 부족",
+                "마이크로비트는 최소 2개가 필요해요.\n"
+                "수신용 1개 + 소리 감지용 1개 이상이어야 해요.\n"
+                "다시 입력해주세요."
+            )
+            continue
+        break
+    MAX_SPACES = new_count - 1
+    update_limit_label()
+
 tk.Button(space_top, text="+ 공간 추가", font=FONT, bg="#E1F5EE", fg="#085041",
           relief="flat", bd=0, padx=10, pady=3, cursor="hand2", command=add_space,
           highlightbackground="#9FE1CB", highlightthickness=1).pack(side="right", padx=(6,0))
@@ -154,6 +264,9 @@ tk.Button(space_top, text="이름 변경", font=FONT, bg=CARD, fg="#2C2C2A",
 tk.Button(space_top, text="공간 삭제", font=FONT, bg="#FCEBEB", fg="#A32D2D",
           relief="flat", bd=0, padx=10, pady=3, cursor="hand2", command=delete_space,
           highlightbackground="#F7C1C1", highlightthickness=1).pack(side="right", padx=(6,0))
+tk.Button(space_top, text="마이크로비트 개수 변경", font=FONT, bg=CARD, fg="#2C2C2A",
+          relief="flat", bd=0, padx=10, pady=3, cursor="hand2", command=change_mb_count,
+          highlightbackground=BORDER, highlightthickness=1).pack(side="right", padx=(6,0))
 
 space_btn_frame = tk.Frame(space_mgr, bg=CARD)
 space_btn_frame.pack(fill="x", pady=(8,0))
@@ -212,17 +325,30 @@ refresh_overview()
 detail_frame = tk.Frame(root, bg=BG)
 detail_frame.pack(fill="both", expand=True, padx=16, pady=(6,0))
 
-level_card = tk.Frame(detail_frame, bg=CARD, padx=14, pady=10,
+peak_info_card = tk.Frame(detail_frame, bg=CARD, padx=14, pady=12,
                        highlightbackground=BORDER, highlightthickness=1)
-level_card.pack(fill="x", pady=(0,6))
-level_name_lbl = tk.Label(level_card, text="공간 1", font=FONT, bg=CARD, fg=GRAY)
-level_name_lbl.pack(anchor="w")
-level_lbl = tk.Label(level_card, text="—", font=("Helvetica", 28, "bold"), bg=CARD, fg=GRAY)
-level_lbl.pack(anchor="w")
+peak_info_card.pack(fill="x", pady=(0,6))
+
+peak_info_top = tk.Frame(peak_info_card, bg=CARD)
+peak_info_top.pack(fill="x")
+
+peak_space_lbl = tk.Label(peak_info_top, text="공간 1", font=FONT, bg=CARD, fg=GRAY)
+peak_space_lbl.pack(side="left")
+
+peak_info_row = tk.Frame(peak_info_card, bg=CARD)
+peak_info_row.pack(fill="x", pady=(6,0))
+
+tk.Label(peak_info_row, text="최고 소리 시각", font=FONT, bg=CARD, fg=GRAY).pack(side="left")
+peak_time_val = tk.Label(peak_info_row, text="—", font=("Helvetica", 18, "bold"), bg=CARD, fg="#D85A30")
+peak_time_val.pack(side="left", padx=(10,0))
+
+tk.Label(peak_info_row, text="  소리값", font=FONT, bg=CARD, fg=GRAY).pack(side="left", padx=(20,0))
+peak_val_lbl = tk.Label(peak_info_row, text="—", font=("Helvetica", 18, "bold"), bg=CARD, fg="#D85A30")
+peak_val_lbl.pack(side="left", padx=(10,0))
 
 stats_frame = tk.Frame(detail_frame, bg=BG)
 stats_frame.pack(fill="x", pady=(0,6))
-for i in range(4):
+for i in range(3):
     stats_frame.columnconfigure(i, weight=1)
 
 def make_stat(parent, title, val, color, col):
@@ -233,10 +359,18 @@ def make_stat(parent, title, val, color, col):
     f.grid(row=0, column=col, padx=(0 if col==0 else 6, 0), sticky="nsew")
     return lbl
 
-lbl_cur  = make_stat(stats_frame, "현재 소리",     "—", "#2C2C2A", 0)
-lbl_peak = make_stat(stats_frame, "최고값 (피크)", "—", "#D85A30", 1)
-lbl_avg  = make_stat(stats_frame, "평균값",         "—", "#185FA5", 2)
-lbl_time = make_stat(stats_frame, "경과 시간",      "0s","#2C2C2A", 3)
+lbl_cur  = make_stat(stats_frame, "현재 소리",  "—", "#2C2C2A", 0)
+lbl_time = make_stat(stats_frame, "현재 시각",  "00:00:00", "#2C2C2A", 1)
+
+# 최고 소리 시각 + 가장 시끄러운 공간 합친 카드
+combined_card = tk.Frame(stats_frame, bg=CARD, highlightbackground=BORDER, highlightthickness=1)
+combined_card.grid(row=0, column=2, padx=(6,0), sticky="nsew")
+
+tk.Label(combined_card, text="최고 소리 시각  /  가장 시끄러운 공간", font=FONT, bg=CARD, fg=GRAY).pack(anchor="w", padx=12, pady=(8,0))
+lbl_peak = tk.Label(combined_card, text="—", font=("Helvetica", 13, "bold"), bg=CARD, fg="#D85A30")
+lbl_peak.pack(anchor="w", padx=12, pady=(2,0))
+lbl_avg  = tk.Label(combined_card, text="—", font=("Helvetica", 13, "bold"), bg=CARD, fg="#185FA5")
+lbl_avg.pack(anchor="w", padx=12, pady=(2,8))
 
 graph_card = tk.Frame(detail_frame, bg=CARD, padx=14, pady=10,
                        highlightbackground=BORDER, highlightthickness=1)
@@ -254,6 +388,7 @@ for sp in ["top","right"]: ax.spines[sp].set_visible(False)
 for sp in ["bottom","left"]: ax.spines[sp].set_color("#E0DED6")
 ax.set_ylabel("소리 레벨", fontsize=9, color=GRAY)
 ax.set_xticks([])
+time_labels = deque([""] * MAX_POINTS, maxlen=MAX_POINTS)
 line_plot, = ax.plot(list(spaces[0]["data"]), color=SPACE_COLORS[0], linewidth=1.5)
 hlines = []
 
@@ -321,10 +456,13 @@ tk.Button(thresh_row, text="  기준값 초기화  ", font=FONT, bg=CARD, fg="#2
 def refresh_detail():
     s = spaces[selected_space]
     color = SPACE_COLORS[selected_space % len(SPACE_COLORS)]
-    level_name_lbl.config(text=s["name"])
+    peak_space_lbl.config(text=s["name"])
+    peak_time_val.config(text=s["peak_time"] if s["count"] > 0 else "—")
+    peak_val_lbl.config(text=str(s["peak"]) if s["count"] > 0 else "—")
     lbl_cur.config(text="—" if s["count"]==0 else str(list(s["data"])[-1]))
-    lbl_peak.config(text="—" if s["count"]==0 else str(s["peak"]))
-    lbl_avg.config(text="—" if s["count"]==0 else str(round(s["total"]/s["count"])))
+    lbl_peak.config(text="—" if s["count"]==0 else f"{s['peak_time']}\n({s['peak']})")
+    loudest = max(spaces, key=lambda x: x["peak"])
+    lbl_avg.config(text=f"{loudest['name']}\n({loudest['peak_time']})" if any(sp["count"]>0 for sp in spaces) else "—")
     line_plot.set_color(color)
     graph_lbl.config(text=f"실시간 소리 레벨 — {s['name']}")
 
@@ -336,23 +474,46 @@ def animate(frame):
 
     tick += 1
 
-    for i, s in enumerate(spaces):
-        # ================================================================
-        # [수정 2/2] 마이크로비트 연결 시 아래 줄 주석처리하고
-        #            그 아래 주석 해제
-        # ================================================================
-        val = fake_sound(tick, s["offset"])  # ← 이 줄 주석처리 (# 붙이기)
-        # val = int(ser.readline().decode('utf-8').strip())  # ← 이 줄 주석 해제
-        # ================================================================
+    # ================================================================
+    # [수정 2/2] 마이크로비트 연결 시 아래 블록 주석 해제
+    # ================================================================
+    # try:
+    #     line = ser.readline().decode('utf-8').strip()  # 예: "1:230"
+    #     channel, val = line.split(":")
+    #     channel = int(channel) - 1  # 0부터 시작하도록 변환
+    #     val = int(val)
+    #     if 0 <= channel < len(spaces):
+    #         s = spaces[channel]
+    #         s["data"].append(val)
+    #         if channel == 0:
+    #             time_labels.append(time.strftime("%H:%M:%S"))
+    #         s["total"] += val
+    #         s["count"] += 1
+    #         if val > s["peak"]:
+    #             s["peak"] = val
+    #             s["peak_time"] = time.strftime("%H:%M:%S")
+    #         if val > s["window_peak"]: s["window_peak"] = val
+    #         if tick % 10 == 0 and s["window_peak"] > 0:
+    #             s["peaks_log"].insert(0, {"time": time.strftime("%H:%M:%S"), "val": s["window_peak"]})
+    #             s["window_peak"] = 0
+    # except Exception:
+    #     pass
+    # ================================================================
 
+    # 가상 데이터 (마이크로비트 연결 전까지 사용)
+    for i, s in enumerate(spaces):
+        val = fake_sound(tick, s["offset"])  # ← 마이크로비트 연결 시 이 for 블록 전체 주석처리
         s["data"].append(val)
+        if i == 0:
+            time_labels.append(time.strftime("%H:%M:%S"))
         s["total"] += val
         s["count"] += 1
-        if val > s["peak"]: s["peak"] = val
+        if val > s["peak"]:
+            s["peak"] = val
+            s["peak_time"] = time.strftime("%H:%M:%S")
         if val > s["window_peak"]: s["window_peak"] = val
-
         if tick % 10 == 0 and s["window_peak"] > 0:
-            s["peaks_log"].insert(0, {"time": f"{tick}s", "val": s["window_peak"]})
+            s["peaks_log"].insert(0, {"time": time.strftime("%H:%M:%S"), "val": s["window_peak"]})
             s["window_peak"] = 0
 
     # 전체 현황 업데이트
@@ -364,18 +525,22 @@ def animate(frame):
     info = LEVELS[lv]
     color = SPACE_COLORS[selected_space % len(SPACE_COLORS)]
 
-    level_lbl.config(text=info["name"], fg=info["color"])
-    level_card.config(bg=info["bg"])
-    level_lbl.config(bg=info["bg"])
-    for w in level_card.winfo_children(): w.config(bg=info["bg"])
+    peak_space_lbl.config(text=s["name"])
+    peak_time_val.config(text=s["peak_time"] if s["count"] > 0 else "—")
+    peak_val_lbl.config(text=str(s["peak"]) if s["count"] > 0 else "—")
 
     lbl_cur.config(text=str(list(s["data"])[-1]), fg=info["color"])
-    lbl_peak.config(text=str(s["peak"]))
-    lbl_avg.config(text=str(round(s["total"]/s["count"])) if s["count"] > 0 else "—")
-    lbl_time.config(text=f"{int(time.time()-start_time)}s")
+    lbl_peak.config(text=f"{s['peak_time']}\n({s['peak']})" if s["count"] > 0 else "—")
+    loudest = max(spaces, key=lambda x: x["peak"])
+    lbl_avg.config(text=f"{loudest['name']}\n({loudest['peak_time']})" if any(sp["count"]>0 for sp in spaces) else "—")
+    lbl_time.config(text=time.strftime("%H:%M:%S"))
 
     y = list(s["data"])
+    tl = list(time_labels)
     line_plot.set_ydata(y)
+    tick_positions = list(range(0, MAX_POINTS, 10))
+    ax.set_xticks(tick_positions)
+    ax.set_xticklabels([tl[p] if tl[p] else "" for p in tick_positions], fontsize=7, color=GRAY, rotation=15)
     line_plot.set_color(color)
     for coll in ax.collections: coll.remove()
     ax.fill_between(range(MAX_POINTS), y, alpha=0.08, color=color)
@@ -385,4 +550,10 @@ def animate(frame):
 
 ani = animation.FuncAnimation(fig, animate, interval=200, blit=False)
 refresh_detail()
+
+def auto_save():
+    save_data()
+    root.after(10000, auto_save)  # 10초마다 자동 저장
+
+root.after(10000, auto_save)
 root.mainloop()
