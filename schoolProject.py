@@ -640,6 +640,7 @@ first_date = [None]
 change_mode = [False]       # 날짜 변경 모드 여부
 change_target = [0]         # 변경할 날짜 인덱스 (0=첫번째, 1=두번째)
 compared_dates = [None, None]  # 현재 비교 중인 두 날짜 저장
+compare_type = [None]       # 비교 유형 저장: "max" / "min" / "normal"
 
 def delete_history():
     """선택된 날짜의 히스토리 파일 삭제"""
@@ -687,18 +688,15 @@ def toggle_compare_mode():
         for w in hist_compare_frame.winfo_children(): w.destroy()
         for w in hist_summary_frame.winfo_children(): w.destroy()
 
-        # 비교 모드일 때 summary_frame 숨기기
         hist_summary_outer.pack_forget()
         hist_compare_frame.pack(fill="both", expand=True)
 
-        data1 = load_history_data(first_date[0])
-        data2 = load_history_data(second_date)
-        if data1: draw_space_cards(hist_compare_frame, data1, first_date[0])
-        if data2: draw_space_cards(hist_compare_frame, data2, second_date)
+        show_combined_compare(first_date[0], second_date)
 
         # 비교한 날짜 저장
         compared_dates[0] = first_date[0]
         compared_dates[1] = second_date
+        compare_type[0] = "normal"  # 일반 날짜 비교
 
         compare_mode[0] = False
         first_date[0] = None
@@ -753,8 +751,12 @@ btn_change_compare = tk.Button(hist_title_row, text="  비교 날짜 변경  ", 
     highlightbackground="#9FE1CB", highlightthickness=1)
 # 초기엔 숨겨둠 (비교 완료 후에만 표시)
 
+maxmin_popup_open = [False]  # 중복 팝업 방지
+
 def compare_max_min():
     """최고/최소 소음 날짜와 비교 - 단일 선택 날짜의 공간 기준"""
+    if maxmin_popup_open[0]:
+        return
     sel = hist_listbox.curselection()
     if not sel:
         messagebox.showwarning("날짜 선택 없음", "먼저 비교할 날짜를 선택해주세요!")
@@ -837,21 +839,60 @@ def compare_max_min():
             is_max = "최고" in label
             value_label = "최고" if is_max else "최소"
 
+            # 어느 날짜가 실선/점선인지 결정
+            # 최고 선택 시 더 높은 날짜가 실선, 최소 선택 시 더 낮은 날짜가 실선
+            def get_date_value(d, sn):
+                data = load_history_data(d)
+                if not data: return 0
+                spaces_list = data.get("spaces", [])
+                if sn:
+                    matched = [s for s in spaces_list if s["name"] == sn]
+                    peaks = [s["peak"] for s in matched if s.get("peak")]
+                else:
+                    peaks = [s["peak"] for s in spaces_list if s.get("peak")]
+                return max(peaks) if peaks else 0
+
+            val_current = get_date_value(current_date, space_name)
+            val_target  = get_date_value(target_date, space_name)
+
+            if is_max:
+                solid_date  = current_date if val_current >= val_target else target_date
+                dashed_date = target_date  if val_current >= val_target else current_date
+            else:
+                solid_date  = current_date if val_current <= val_target else target_date
+                dashed_date = target_date  if val_current <= val_target else current_date
+
+            dates_ordered = [solid_date, dashed_date]
+
             hist_detail_title.config(text=f"{current_date}  vs  {target_date} ({label})")
             for w in hist_compare_frame.winfo_children(): w.destroy()
             hist_summary_outer.pack_forget()
             hist_compare_frame.pack(fill="both", expand=True)
 
-            data1 = load_history_data(current_date)
-            data2 = load_history_data(target_date)
+            data1 = load_history_data(solid_date)
+            data2 = load_history_data(dashed_date)
 
             if not data1 or not data2:
                 return
 
-            # 공간 이름 표시
-            tk.Label(hist_compare_frame,
-                text=f"공간: {space_name if space_name else '전체'}",
-                font=FONT_BOLD, bg=BG, fg="#2C2C2A").pack(anchor="w", pady=(6,4))
+            # 실선/점선 날짜 안내 표시
+            legend_frame = tk.Frame(hist_compare_frame, bg=CARD, padx=14, pady=8,
+                highlightbackground=BORDER, highlightthickness=1)
+            legend_frame.pack(fill="x", pady=(0,6))
+            tk.Label(legend_frame, text=f"공간: {space_name if space_name else '전체'}",
+                font=FONT_BOLD, bg=CARD, fg="#2C2C2A").pack(anchor="w", pady=(0,6))
+            row1 = tk.Frame(legend_frame, bg=CARD)
+            row1.pack(fill="x", pady=2)
+            tk.Label(row1, text="━━━━━━", font=("Helvetica", 14, "bold"),
+                bg=CARD, fg="#185FA5").pack(side="left")
+            tk.Label(row1, text=f"  실선  →  {solid_date}",
+                font=("Helvetica", 12, "bold"), bg=CARD, fg="#185FA5").pack(side="left")
+            row2 = tk.Frame(legend_frame, bg=CARD)
+            row2.pack(fill="x", pady=2)
+            tk.Label(row2, text="┅┅┅┅┅┅", font=("Helvetica", 14, "bold"),
+                bg=CARD, fg="#D85A30").pack(side="left")
+            tk.Label(row2, text=f"  점선  →  {dashed_date}",
+                font=("Helvetica", 12, "bold"), bg=CARD, fg="#D85A30").pack(side="left")
 
             # 한 그래프에 두 날짜 꺾은선 합쳐서 표시
             graph_frame = tk.Frame(hist_compare_frame, bg=CARD, padx=10, pady=8,
@@ -870,9 +911,22 @@ def compare_max_min():
             ax_c.set_ylabel("소음값", fontsize=9, color=GRAY)
             ax_c.set_xlabel("시간", fontsize=9, color=GRAY)
 
-            colors_pair = ["#185FA5", "#D85A30"]
+            # 공간별 색상 팔레트 (날짜×공간 조합마다 다른 색)
+            space_color_map = {}
+            color_pool = ["#185FA5", "#D85A30", "#1D9E75", "#7F77DD",
+                          "#BA7517", "#A32D2D", "#085041", "#633806"]
+            color_idx = [0]
+
+            def get_space_color(sname):
+                if sname not in space_color_map:
+                    space_color_map[sname] = color_pool[color_idx[0] % len(color_pool)]
+                    color_idx[0] += 1
+                return space_color_map[sname]
+
             all_times = []
-            for idx, (d, data) in enumerate([(current_date, data1), (target_date, data2)]):
+            line_objects = {}  # 공간명 → [line, fill] 저장
+
+            for idx, (d, data) in enumerate([(solid_date, data1), (dashed_date, data2)]):
                 spaces_list = data.get("spaces", [])
                 if space_name:
                     target_spaces = [s for s in spaces_list if s["name"] == space_name]
@@ -884,9 +938,27 @@ def compare_max_min():
                     vals = [l["val"] for l in logs]
                     times = [l["time"] for l in logs]
                     if len(times) > len(all_times): all_times = times
-                    ax_c.plot(range(len(vals)), vals, color=colors_pair[idx],
-                        linewidth=1.5, label=d)
-                    ax_c.fill_between(range(len(vals)), vals, alpha=0.07, color=colors_pair[idx])
+                    s_color = get_space_color(s["name"])
+                    line_style = "-" if idx == 0 else (0, (4, 3))
+                    marker = "o" if idx == 0 else "s"
+                    line, = ax_c.plot(range(len(vals)), vals, color=s_color,
+                        linewidth=2.5, linestyle=line_style,
+                        label=f"{d} - {s['name']}", marker=marker, markersize=3)
+                    fill = ax_c.fill_between(range(len(vals)), vals, alpha=0.05, color=s_color)
+                    key = f"{s['name']}_{idx}"
+                    line_objects[key] = {"line": line, "fill": fill, "color": s_color}
+
+            def highlight_space(selected_name):
+                """선택된 공간 선 강조, 나머지 흐리게"""
+                for key, obj in line_objects.items():
+                    sn = key.rsplit("_", 1)[0]
+                    if selected_name is None or sn == selected_name:
+                        obj["line"].set_alpha(1.0)
+                        obj["line"].set_linewidth(2.5)
+                    else:
+                        obj["line"].set_alpha(0.15)
+                        obj["line"].set_linewidth(1.0)
+                canvas_c.draw_idle()
 
             if all_times:
                 n = len(all_times)
@@ -899,7 +971,7 @@ def compare_max_min():
             thresh_colors_h = ["#1D9E75","#378ADD","#BA7517","#D85A30"]
             for i, t in enumerate(thresholds):
                 ax_c.axhline(y=t, color=thresh_colors_h[i], linewidth=0.7, linestyle="--", alpha=0.5)
-            ax_c.legend(fontsize=8, loc="upper right")
+            ax_c.legend(fontsize=7, loc="upper right")
             fig_c.tight_layout()
 
             canvas_c = FigureCanvasTkAgg(fig_c, master=graph_frame)
@@ -921,33 +993,109 @@ def compare_max_min():
 
             plt.close(fig_c)
 
-            # 숫자 표시 (선택한 최고 또는 최소값만)
+            # 수치 표시 - 공간별로 묶어서 표시
             val_frame = tk.Frame(hist_compare_frame, bg=CARD, padx=14, pady=10,
                 highlightbackground=BORDER, highlightthickness=1)
             val_frame.pack(fill="x", pady=(0,6))
 
-            for idx, (d, data) in enumerate([(current_date, data1), (target_date, data2)]):
+            # 공간 목록 수집
+            all_space_names = []
+            for d, data in [(solid_date, data1), (dashed_date, data2)]:
                 spaces_list = data.get("spaces", [])
                 if space_name:
                     target_spaces = [s for s in spaces_list if s["name"] == space_name]
                 else:
                     target_spaces = spaces_list
                 for s in target_spaces:
+                    if s["name"] not in all_space_names:
+                        all_space_names.append(s["name"])
+
+            # 공간 선택 탭 + 접기/펼치기 (가로 스크롤)
+            tab_outer = tk.Frame(val_frame, bg=CARD)
+            tab_outer.pack(fill="x", pady=(4,6))
+            tab_canvas = tk.Canvas(tab_outer, bg=CARD, highlightthickness=0, height=36)
+            tab_hscroll = tk.Scrollbar(tab_outer, orient="horizontal", command=tab_canvas.xview)
+            tab_canvas.configure(xscrollcommand=tab_hscroll.set)
+            tab_frame = tk.Frame(tab_canvas, bg=CARD)
+            tab_canvas.create_window((0,0), window=tab_frame, anchor="nw")
+            def on_tab_configure(event):
+                tab_canvas.configure(scrollregion=tab_canvas.bbox("all"))
+            tab_frame.bind("<Configure>", on_tab_configure)
+            tab_canvas.pack(fill="x")
+            tab_hscroll.pack(fill="x")
+
+            content_frames = {}
+            active_space = [None]
+
+            def select_space_tab(sname):
+                # 이전 선택 닫기
+                if active_space[0] and active_space[0] in content_frames:
+                    content_frames[active_space[0]]["frame"].pack_forget()
+                    content_frames[active_space[0]]["btn"].config(bg=CARD, fg="#2C2C2A")
+
+                # 같은 탭 다시 누르면 닫기
+                if active_space[0] == sname:
+                    active_space[0] = None
+                    highlight_space(None)  # 모두 동일 색광도
+                    return
+
+                # 새 탭 열기
+                active_space[0] = sname
+                sc = get_space_color(sname)
+                content_frames[sname]["btn"].config(bg=sc, fg="#ffffff")
+                content_frames[sname]["frame"].pack(fill="x", pady=(0,4))
+                highlight_space(sname)  # 선택 공간 강조
+
+            for sname in all_space_names:
+                s_color = get_space_color(sname)
+
+                # 탭 버튼
+                btn = tk.Button(tab_frame, text=sname, font=FONT,
+                    bg=CARD, fg="#2C2C2A", relief="flat", bd=0,
+                    padx=12, pady=4, cursor="hand2",
+                    command=lambda n=sname: select_space_tab(n),
+                    highlightbackground=s_color, highlightthickness=1)
+                btn.pack(side="left", padx=(0,6))
+
+                # 해당 공간 수치 프레임 (초기엔 숨김)
+                cf = tk.Frame(val_frame, bg=CARD)
+
+                tk.Label(cf, text=f"📍 {sname}",
+                    font=FONT_BOLD, bg=CARD, fg=s_color).pack(anchor="w", pady=(4,2))
+
+                for idx, (d, data) in enumerate([(solid_date, data1), (dashed_date, data2)]):
+                    spaces_list = data.get("spaces", [])
+                    matched = [s for s in spaces_list if s["name"] == sname]
+                    if not matched: continue
+                    s = matched[0]
                     logs = s.get("peaks_log", [])
                     if not logs: continue
                     vals = [l["val"] for l in logs]
                     val = max(vals) if is_max else min(vals)
-                    row = tk.Frame(val_frame, bg=CARD)
+                    # 해당 값의 시간 찾기
+                    val_time = next((l["time"] for l in logs if l["val"] == val), "—")
+                    line_style_txt = "━━━ 실선" if idx == 0 else "┅┅┅ 점선"
+                    line_color = "#185FA5" if idx == 0 else "#D85A30"
+                    row = tk.Frame(cf, bg=CARD)
                     row.pack(fill="x", pady=2)
-                    tk.Label(row, text=d, font=FONT, bg=CARD, fg=GRAY).pack(side="left")
+                    tk.Label(row, text=line_style_txt,
+                        font=("Helvetica", 11, "bold"), bg=CARD, fg=line_color).pack(side="left")
+                    tk.Label(row, text=f"  {d}",
+                        font=FONT, bg=CARD, fg=GRAY).pack(side="left")
                     tk.Label(row, text=f"  {value_label}: ",
                         font=FONT, bg=CARD, fg=GRAY).pack(side="left")
                     tk.Label(row, text=str(val),
                         font=("Helvetica", 14, "bold"), bg=CARD,
-                        fg=colors_pair[idx]).pack(side="left")
+                        fg=s_color).pack(side="left")
+                    tk.Label(row, text=f"  시간: {val_time}",
+                        font=FONT, bg=CARD, fg=GRAY).pack(side="left")
+
+                tk.Frame(cf, bg="#E0DED6", height=1).pack(fill="x", pady=(4,0))
+                content_frames[sname] = {"frame": cf, "btn": btn}
 
             compared_dates[0] = current_date
             compared_dates[1] = target_date
+            compare_type[0] = "max" if is_max else "min"  # 최고/최소 비교 유형 저장
             btn_change_compare.pack(side="right", padx=(0,8))
             btn_maxmin.pack_forget()
 
@@ -964,35 +1112,69 @@ def compare_max_min():
             highlightbackground="#B5D4F4", highlightthickness=1).pack(side="left")
 
     # 공간 선택 팝업
+    maxmin_popup_open[0] = True
     popup1 = tk.Toplevel(root)
     popup1.title("공간 선택")
-    popup1.geometry("400x160")
+    popup1.geometry("420x200")
     popup1.configure(bg=BG)
     popup1.resizable(False, False)
+    popup1.protocol("WM_DELETE_WINDOW", lambda: [setattr(maxmin_popup_open, '__setitem__', None) or maxmin_popup_open.__setitem__(0, False), popup1.destroy()])
 
     tk.Label(popup1, text="기준 공간을 선택하세요 (공통 공간만 표시)",
-        font=FONT_BOLD, bg=BG, fg="#2C2C2A").pack(pady=(16,12))
+        font=FONT_BOLD, bg=BG, fg="#2C2C2A").pack(pady=(12,6))
 
-    btn_row1 = tk.Frame(popup1, bg=BG)
-    btn_row1.pack()
+    # 검색창
+    search_var = tk.StringVar()
+    search_entry = tk.Entry(popup1, textvariable=search_var, font=FONT,
+        highlightbackground=BORDER, highlightthickness=1, relief="flat")
+    search_entry.pack(fill="x", padx=16, pady=(0,8))
+    search_entry.insert(0, "🔍 공간 검색...")
+    search_entry.bind("<FocusIn>", lambda e: search_entry.delete(0, "end") if search_entry.get().startswith("🔍") else None)
+
+    # 가로 스크롤 버튼 영역
+    btn_outer = tk.Frame(popup1, bg=BG)
+    btn_outer.pack(fill="x", padx=16, pady=(0,8))
+    btn_canvas = tk.Canvas(btn_outer, bg=BG, highlightthickness=0, height=44)
+    btn_hscroll = tk.Scrollbar(btn_outer, orient="horizontal", command=btn_canvas.xview)
+    btn_canvas.configure(xscrollcommand=btn_hscroll.set)
+    btn_row1 = tk.Frame(btn_canvas, bg=BG)
+    btn_canvas.create_window((0,0), window=btn_row1, anchor="nw")
+    def on_btn_configure(event):
+        btn_canvas.configure(scrollregion=btn_canvas.bbox("all"))
+    btn_row1.bind("<Configure>", on_btn_configure)
+    btn_canvas.pack(fill="x")
+    btn_hscroll.pack(fill="x")
+
+    all_space_btns = []
 
     def select_space(space_name=None):
+        maxmin_popup_open[0] = False
         popup1.destroy()
         show_maxmin_popup(space_name)
 
-    # 전체 버튼
-    tk.Button(btn_row1, text="전체", font=FONT, bg=CARD, fg="#2C2C2A",
-        relief="flat", bd=0, padx=12, pady=6, cursor="hand2",
-        command=lambda: select_space(None),
-        highlightbackground=BORDER, highlightthickness=1).pack(side="left", padx=(0,8))
+    def refresh_space_btns(*args):
+        for w in btn_row1.winfo_children(): w.destroy()
+        keyword = search_var.get().strip()
+        if keyword.startswith("🔍"): keyword = ""
 
-    # 공통 공간만 버튼으로 표시
-    for i, name in enumerate(filtered_spaces):
-        color = SPACE_COLORS[i % len(SPACE_COLORS)]
-        tk.Button(btn_row1, text=name, font=FONT, bg=CARD, fg=color,
+        # 전체 버튼
+        tk.Button(btn_row1, text="전체", font=FONT, bg=CARD, fg="#2C2C2A",
             relief="flat", bd=0, padx=12, pady=6, cursor="hand2",
-            command=lambda n=name: select_space(n),
-            highlightbackground=color, highlightthickness=1).pack(side="left", padx=(0,8))
+            command=lambda: select_space(None),
+            highlightbackground=BORDER, highlightthickness=1).pack(side="left", padx=(0,8))
+
+        # 검색 필터링된 공간 버튼
+        for i, name in enumerate(filtered_spaces):
+            if keyword and keyword.lower() not in name.lower():
+                continue
+            color = SPACE_COLORS[i % len(SPACE_COLORS)]
+            tk.Button(btn_row1, text=name, font=FONT, bg=CARD, fg=color,
+                relief="flat", bd=0, padx=12, pady=6, cursor="hand2",
+                command=lambda n=name: select_space(n),
+                highlightbackground=color, highlightthickness=1).pack(side="left", padx=(0,8))
+
+    search_var.trace("w", refresh_space_btns)
+    refresh_space_btns()
 
 btn_maxmin = tk.Button(hist_title_row, text="  최고/최소 소음 날짜와 비교  ", font=FONT,
     bg=CARD, fg="#2C2C2A", relief="flat", bd=0, padx=10, pady=4,
@@ -1027,6 +1209,258 @@ hist_summary_hscroll.pack(fill="x")
 # 비교 영역 - 단순 프레임
 hist_compare_frame = tk.Frame(hist_right, bg=BG)
 hist_compare_frame.pack(fill="both", expand=True)
+
+def show_combined_compare(date1, date2):
+    """두 날짜 합쳐진 그래프 + 공간 탭 + 최고값 수치 표시"""
+    data1 = load_history_data(date1)
+    data2 = load_history_data(date2)
+    if not data1 or not data2:
+        return
+
+    spaces1 = {s["name"]: s for s in data1.get("spaces", [])}
+    spaces2 = {s["name"]: s for s in data2.get("spaces", [])}
+    all_snames = list(dict.fromkeys(list(spaces1.keys()) + list(spaces2.keys())))
+
+    # 합쳐진 그래프
+    graph_frame2 = tk.Frame(hist_compare_frame, bg=CARD, padx=10, pady=8,
+        highlightbackground=BORDER, highlightthickness=1)
+    graph_frame2.pack(fill="x", pady=(0,6))
+    tk.Label(graph_frame2, text="소리 레벨  (실선: 첫번째 날짜 / 점선: 두번째 날짜)",
+        font=("Helvetica", 9), bg=CARD, fg=GRAY).pack(anchor="w")
+
+    fig2, ax2 = plt.subplots(figsize=(7, 2.2))
+    fig2.patch.set_facecolor("#ffffff")
+    ax2.set_facecolor("#ffffff")
+    ax2.set_ylim(0, 270)
+    ax2.tick_params(colors=GRAY, labelsize=8)
+    for sp in ["top","right"]: ax2.spines[sp].set_visible(False)
+    for sp in ["bottom","left"]: ax2.spines[sp].set_color("#E0DED6")
+    ax2.set_ylabel("소음값", fontsize=9, color=GRAY)
+    ax2.set_xlabel("시간", fontsize=9, color=GRAY)
+
+    all_times2 = []
+    line_objects2 = {}
+    for i, sname in enumerate(all_snames):
+        s_color = SPACE_COLORS[i % len(SPACE_COLORS)]
+        for idx, (d, sdict) in enumerate([(date1, spaces1), (date2, spaces2)]):
+            if sname not in sdict: continue
+            s = sdict[sname]
+            logs = sorted(s.get("peaks_log", []), key=lambda x: x["time"])
+            if not logs: continue
+            vals = [l["val"] for l in logs]
+            times = [l["time"] for l in logs]
+            if len(times) > len(all_times2): all_times2 = times
+            line_style = "-" if idx == 0 else (0, (4, 3))
+            marker = "o" if idx == 0 else "s"
+            line2, = ax2.plot(range(len(vals)), vals, color=s_color,
+                linewidth=2.5, linestyle=line_style,
+                label=f"{d} - {sname}", marker=marker, markersize=3)
+            ax2.fill_between(range(len(vals)), vals, alpha=0.05, color=s_color)
+            line_objects2[f"{sname}_{idx}"] = {"line": line2, "color": s_color}
+
+    def highlight_space2(selected_name):
+        for key, obj in line_objects2.items():
+            sn = key.rsplit("_", 1)[0]
+            if selected_name is None or sn == selected_name:
+                obj["line"].set_alpha(1.0)
+                obj["line"].set_linewidth(2.5)
+            else:
+                obj["line"].set_alpha(0.15)
+                obj["line"].set_linewidth(1.0)
+        canvas2.draw_idle()
+
+    if all_times2:
+        n = len(all_times2)
+        step = max(1, n // 6)
+        tick_pos = list(range(0, n, step))
+        ax2.set_xticks(tick_pos)
+        ax2.set_xticklabels([all_times2[j] for j in tick_pos], fontsize=7, color=GRAY, rotation=20)
+
+    thresh_colors_h = ["#1D9E75","#378ADD","#BA7517","#D85A30"]
+    for i, t in enumerate(thresholds):
+        ax2.axhline(y=t, color=thresh_colors_h[i], linewidth=0.7, linestyle="--", alpha=0.5)
+    ax2.legend(fontsize=7, loc="upper right")
+    fig2.tight_layout()
+
+    canvas2 = FigureCanvasTkAgg(fig2, master=graph_frame2)
+    canvas2.get_tk_widget().pack(fill="x")
+    canvas2.draw()
+
+    total_pts2 = max(1, len(all_times2))
+    view_pts2 = max(1, int(total_pts2 * 0.4))
+    def scroll2(val):
+        xmin = float(val) * total_pts2
+        ax2.set_xlim(xmin, xmin + view_pts2)
+        canvas2.draw_idle()
+    tk.Scale(graph_frame2, from_=0, to=max(0.01, 1 - view_pts2/total_pts2),
+        resolution=0.01, orient="horizontal", command=scroll2,
+        bg=CARD, fg=GRAY, troughcolor="#E0DED6",
+        highlightthickness=0, bd=0, sliderlength=40,
+        showvalue=False, length=300).pack(pady=(2,0))
+    plt.close(fig2)
+
+    # 공간 선택 탭 + 최고값 수치
+    val_frame2 = tk.Frame(hist_compare_frame, bg=CARD, padx=14, pady=8,
+        highlightbackground=BORDER, highlightthickness=1)
+    val_frame2.pack(fill="x", pady=(0,6))
+    tk.Label(val_frame2, text="공간 선택 (클릭하면 그래프 강조)",
+        font=FONT, bg=CARD, fg=GRAY).pack(anchor="w", pady=(0,6))
+    tab_canvas2 = tk.Canvas(val_frame2, bg=CARD, highlightthickness=0, height=36)
+    tab_hscroll2 = tk.Scrollbar(val_frame2, orient="horizontal", command=tab_canvas2.xview)
+    tab_canvas2.configure(xscrollcommand=tab_hscroll2.set)
+    tab_btn_frame2 = tk.Frame(tab_canvas2, bg=CARD)
+    tab_canvas2.create_window((0,0), window=tab_btn_frame2, anchor="nw")
+    def on_tab2_configure(event):
+        tab_canvas2.configure(scrollregion=tab_canvas2.bbox("all"))
+    tab_btn_frame2.bind("<Configure>", on_tab2_configure)
+    tab_canvas2.pack(fill="x")
+    tab_hscroll2.pack(fill="x")
+
+    val_content2 = tk.Frame(val_frame2, bg=CARD)
+    active2 = [None]
+    active_val2 = [None]  # 현재 선택된 최고/최소
+    tab_btns2 = {}
+    space_val_frames2 = {}
+
+    for i, sname in enumerate(all_snames):
+        s_color = SPACE_COLORS[i % len(SPACE_COLORS)]
+        cf2 = tk.Frame(val_content2, bg=CARD)
+        tk.Label(cf2, text=f"📍 {sname}",
+            font=FONT_BOLD, bg=CARD, fg=s_color).pack(anchor="w", pady=(4,2))
+
+        # 최고 / 최소 두 섹션
+        maxmin_btns = {}
+        maxmin_frames = {}
+
+        for val_type, val_label, val_color in [("max", "최고", "#D85A30"), ("min", "최소", "#185FA5")]:
+            # 섹션 버튼
+            sec_btn = tk.Button(cf2, text=val_label, font=FONT_BOLD,
+                bg=CARD, fg=val_color, relief="flat", bd=0,
+                padx=10, pady=3, cursor="hand2",
+                highlightbackground=val_color, highlightthickness=1)
+            sec_btn.pack(anchor="w", pady=(4,0))
+
+            # 수치 내용 프레임 (초기 숨김)
+            sec_frame = tk.Frame(cf2, bg=CARD)
+
+            for idx, (d, sdict) in enumerate([(date1, spaces1), (date2, spaces2)]):
+                if sname not in sdict: continue
+                s = sdict[sname]
+                logs = s.get("peaks_log", [])
+                if not logs: continue
+                vals = [l["val"] for l in logs]
+                val = max(vals) if val_type == "max" else min(vals)
+                val_time = next((l["time"] for l in logs if l["val"] == val), "—")
+                line_style_txt = "━━━ 실선" if idx == 0 else "┅┅┅ 점선"
+                line_color = "#185FA5" if idx == 0 else "#D85A30"
+                row = tk.Frame(sec_frame, bg=CARD)
+                row.pack(fill="x", pady=2)
+                tk.Label(row, text=line_style_txt,
+                    font=("Helvetica", 11, "bold"), bg=CARD, fg=line_color).pack(side="left")
+                tk.Label(row, text=f"  {d}",
+                    font=FONT, bg=CARD, fg=GRAY).pack(side="left")
+                tk.Label(row, text=f"  {val_label}: ",
+                    font=FONT, bg=CARD, fg=GRAY).pack(side="left")
+                tk.Label(row, text=str(val),
+                    font=("Helvetica", 14, "bold"), bg=CARD, fg=s_color).pack(side="left")
+                tk.Label(row, text=f"  시간: {val_time}",
+                    font=FONT, bg=CARD, fg=GRAY).pack(side="left")
+
+            maxmin_btns[val_type] = sec_btn
+            maxmin_frames[val_type] = sec_frame
+
+            def make_val_btn(vt=val_type, vc=val_color, sn=sname, sf=sec_frame, mb=maxmin_btns):
+                def on_click():
+                    # 이전 선택 닫기
+                    if active_val2[0]:
+                        prev_sn, prev_vt = active_val2[0]
+                        if prev_sn in space_val_frames2:
+                            prev_frames = space_val_frames2[prev_sn]["maxmin_frames"]
+                            prev_btns = space_val_frames2[prev_sn]["maxmin_btns"]
+                            if prev_vt in prev_frames:
+                                prev_frames[prev_vt].pack_forget()
+                            if prev_vt in prev_btns:
+                                prev_vt_color = "#D85A30" if prev_vt == "max" else "#185FA5"
+                                prev_btns[prev_vt].config(bg=CARD, fg=prev_vt_color)
+
+                    # 같은 버튼 다시 누르면 닫기
+                    if active_val2[0] == (sn, vt):
+                        active_val2[0] = None
+                        highlight_space2(None)
+                        return
+
+                    # 새 선택 열기
+                    active_val2[0] = (sn, vt)
+                    mb[vt].config(bg=vc, fg="#ffffff")
+                    sf.pack(fill="x", padx=8, pady=(2,4))
+
+                    # 그래프 업데이트 - 최고/최소 기준으로 실선/점선 결정
+                    is_max_sel = (vt == "max")
+                    def get_val(d, sn2):
+                        data = load_history_data(d)
+                        if not data: return 0
+                        spaces_list = data.get("spaces", [])
+                        matched = [s for s in spaces_list if s["name"] == sn2]
+                        logs = matched[0].get("peaks_log", []) if matched else []
+                        vals = [l["val"] for l in logs]
+                        return max(vals) if vals else 0
+
+                    v1 = get_val(date1, sn)
+                    v2 = get_val(date2, sn)
+                    if is_max_sel:
+                        solid_sn = date1 if v1 >= v2 else date2
+                    else:
+                        solid_sn = date1 if v1 <= v2 else date2
+
+                    # 그래프 선 스타일 업데이트
+                    for key, obj in line_objects2.items():
+                        key_sn = key.rsplit("_", 1)[0]
+                        key_idx = int(key.rsplit("_", 1)[1])
+                        if key_sn == sn:
+                            is_solid = (key_idx == 0 and solid_sn == date1) or \
+                                       (key_idx == 1 and solid_sn == date2)
+                            obj["line"].set_linestyle("-" if is_solid else (0,(4,3)))
+                            obj["line"].set_alpha(1.0)
+                            obj["line"].set_linewidth(2.5)
+                        else:
+                            obj["line"].set_alpha(0.15)
+                            obj["line"].set_linewidth(1.0)
+                    canvas2.draw_idle()
+                return on_click
+
+            sec_btn.config(command=make_val_btn())
+
+        tk.Frame(cf2, bg="#E0DED6", height=1).pack(fill="x", pady=(4,0))
+        space_val_frames2[sname] = {"frame": cf2, "maxmin_btns": maxmin_btns, "maxmin_frames": maxmin_frames}
+
+        def make_tab(sn=sname, sc=s_color):
+            def on_click():
+                if active2[0] == sn:
+                    active2[0] = None
+                    active_val2[0] = None
+                    tab_btns2[sn].config(bg=CARD, fg="#2C2C2A")
+                    highlight_space2(None)
+                    space_val_frames2[sn]["frame"].pack_forget()
+                    val_content2.pack_forget()
+                else:
+                    if active2[0] and active2[0] in tab_btns2:
+                        tab_btns2[active2[0]].config(bg=CARD, fg="#2C2C2A")
+                        space_val_frames2[active2[0]]["frame"].pack_forget()
+                    active2[0] = sn
+                    tab_btns2[sn].config(bg=sc, fg="#ffffff")
+                    highlight_space2(sn)
+                    val_content2.pack(fill="x", pady=(6,0))
+                    space_val_frames2[sn]["frame"].pack(fill="x")
+            return on_click
+
+        btn2 = tk.Button(tab_btn_frame2, text=sname, font=FONT,
+            bg=CARD, fg="#2C2C2A", relief="flat", bd=0,
+            padx=12, pady=4, cursor="hand2",
+            command=make_tab(),
+            highlightbackground=s_color, highlightthickness=1)
+        btn2.pack(side="left", padx=(0,6))
+        tab_btns2[sname] = btn2
+
 
 def draw_space_cards(parent, data, date_str):
     """공간별 카드 + 꺾은선 그래프 그리기 (드래그/휠 이동 가능)"""
@@ -1157,10 +1591,48 @@ def show_history_detail(date_str):
         for w in hist_compare_frame.winfo_children(): w.destroy()
         hist_compare_frame.pack(fill="both", expand=True)
         hist_summary_outer.pack_forget()
-        data1 = load_history_data(compared_dates[0])
-        data2 = load_history_data(compared_dates[1])
-        if data1: draw_space_cards(hist_compare_frame, data1, compared_dates[0])
-        if data2: draw_space_cards(hist_compare_frame, data2, compared_dates[1])
+
+        # 비교 유형에 따라 다른 방식으로 표시
+        if compare_type[0] in ("max", "min"):
+            # 최고/최소 비교였으면 같은 방식으로 재표시
+            is_max_saved = compare_type[0] == "max"
+            label_saved = "최고 소음 날짜" if is_max_saved else "최소 소음 날짜"
+            # compare_with 재호출 대신 직접 표시
+            _d1, _d2 = compared_dates[0], compared_dates[1]
+            # 실선/점선 재결정
+            def _get_val(d):
+                data = load_history_data(d)
+                if not data: return 0
+                peaks = [s["peak"] for s in data.get("spaces", []) if s.get("peak")]
+                return max(peaks) if peaks else 0
+            v1, v2 = _get_val(_d1), _get_val(_d2)
+            if is_max_saved:
+                solid_d  = _d1 if v1 >= v2 else _d2
+                dashed_d = _d2 if v1 >= v2 else _d1
+            else:
+                solid_d  = _d1 if v1 <= v2 else _d2
+                dashed_d = _d2 if v1 <= v2 else _d1
+
+            legend_frame = tk.Frame(hist_compare_frame, bg=CARD, padx=14, pady=8,
+                highlightbackground=BORDER, highlightthickness=1)
+            legend_frame.pack(fill="x", pady=(0,6))
+            tk.Label(legend_frame, text=f"비교: {label_saved}",
+                font=FONT_BOLD, bg=CARD, fg="#2C2C2A").pack(anchor="w", pady=(0,6))
+            row1 = tk.Frame(legend_frame, bg=CARD)
+            row1.pack(fill="x", pady=2)
+            tk.Label(row1, text="━━━━━━", font=("Helvetica", 14, "bold"),
+                bg=CARD, fg="#185FA5").pack(side="left")
+            tk.Label(row1, text=f"  실선  →  {solid_d}",
+                font=("Helvetica", 12, "bold"), bg=CARD, fg="#185FA5").pack(side="left")
+            row2 = tk.Frame(legend_frame, bg=CARD)
+            row2.pack(fill="x", pady=2)
+            tk.Label(row2, text="┅┅┅┅┅┅", font=("Helvetica", 14, "bold"),
+                bg=CARD, fg="#D85A30").pack(side="left")
+            tk.Label(row2, text=f"  점선  →  {dashed_d}",
+                font=("Helvetica", 12, "bold"), bg=CARD, fg="#D85A30").pack(side="left")
+            show_combined_compare(solid_d, dashed_d)
+        else:
+            show_combined_compare(compared_dates[0], compared_dates[1])
         return
 
     if compare_mode[0]:
