@@ -277,6 +277,8 @@ top.pack(fill="x")
 tk.Label(top, text="소리 감지 모니터", font=FONT_BOLD, bg=BG, fg="#2C2C2A").pack(side="left")
 status_lbl = tk.Label(top, text="● 실행 중", font=("Helvetica", 12, "bold"), bg=BG, fg="#22C55E")
 status_lbl.pack(side="left", padx=12)
+date_lbl = tk.Label(top, text=time.strftime("%Y-%m-%d"), font=FONT, bg=BG, fg=GRAY)
+date_lbl.pack(side="left")
 
 def toggle():
     """일시정지/재생 버튼 - running 변수로 애니메이션 제어"""
@@ -466,13 +468,13 @@ def refresh_overview():
 refresh_overview()
 stats_frame = tk.Frame(detail_frame, bg=BG)
 stats_frame.pack(fill="x", pady=(0,6))
-for i in range(3): stats_frame.columnconfigure(i, weight=1)
+for i in range(4): stats_frame.columnconfigure(i, weight=1)
 
 def make_stat(parent, title, val, color, col):
     """통계 카드 하나 생성 후 라벨 반환"""
     f = tk.Frame(parent, bg=CARD, highlightbackground=BORDER, highlightthickness=1)
     tk.Label(f, text=title, font=FONT, bg=CARD, fg=GRAY).pack(anchor="w", padx=12, pady=(8,0))
-    lbl = tk.Label(f, text=val, font=("Helvetica", 18, "bold"), bg=CARD, fg=color)
+    lbl = tk.Label(f, text=val, font=("Helvetica", 15, "bold"), bg=CARD, fg=color)
     lbl.pack(anchor="w", padx=12, pady=(0,8))
     f.grid(row=0, column=col, padx=(0 if col==0 else 6, 0), sticky="nsew")
     return lbl
@@ -484,15 +486,49 @@ lbl_time = make_stat(stats_frame, "현재 시간",  "00:00:00", "#2C2C2A", 1)
 combined_card = tk.Frame(stats_frame, bg=CARD, highlightbackground=BORDER, highlightthickness=1)
 combined_card.grid(row=0, column=2, padx=(6,0), sticky="nsew")
 tk.Label(combined_card, text="[ 선택 공간 최고 소음 ]", font=FONT, bg=CARD, fg=GRAY).pack(anchor="w", padx=12, pady=(8,2))
-lbl_avg = tk.Label(combined_card, text="—", font=("Helvetica", 13, "bold"), bg=CARD, fg="#185FA5")
+lbl_avg = tk.Label(combined_card, text="—", font=("Helvetica", 12, "bold"), bg=CARD, fg="#185FA5")
 lbl_avg.pack(anchor="w", padx=12)
 combined_row = tk.Frame(combined_card, bg=CARD)
 combined_row.pack(anchor="w", padx=12, pady=(2,8))
-lbl_peak_time = tk.Label(combined_row, text="—", font=("Helvetica", 12, "bold"), bg=CARD, fg="#D85A30")
+lbl_peak_time = tk.Label(combined_row, text="—", font=("Helvetica", 11, "bold"), bg=CARD, fg="#D85A30")
 lbl_peak_time.pack(side="left")
 tk.Label(combined_row, text="  |  ", font=FONT, bg=CARD, fg=GRAY).pack(side="left")
-lbl_peak = tk.Label(combined_row, text="—", font=("Helvetica", 12, "bold"), bg=CARD, fg="#D85A30")
+lbl_peak = tk.Label(combined_row, text="—", font=("Helvetica", 11, "bold"), bg=CARD, fg="#D85A30")
 lbl_peak.pack(side="left")
+
+# 전날 대비 소음 증감 카드
+diff_card = tk.Frame(stats_frame, bg=CARD, highlightbackground=BORDER, highlightthickness=1)
+diff_card.grid(row=0, column=3, padx=(6,0), sticky="nsew")
+tk.Label(diff_card, text="전날 대비", font=FONT, bg=CARD, fg=GRAY).pack(anchor="w", padx=12, pady=(8,0))
+lbl_diff = tk.Label(diff_card, text="—", font=("Helvetica", 15, "bold"), bg=CARD, fg="#2C2C2A")
+lbl_diff.pack(anchor="w", padx=12, pady=(0,8))
+
+def update_diff_label():
+    """전날 대비 소음 증감 계산 및 표시"""
+    import datetime
+    s = spaces[selected_space]
+    if s["count"] == 0:
+        lbl_diff.config(text="—", fg="#2C2C2A")
+        return
+    today_peak = s["peak"]
+    yesterday = (datetime.date.today() - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+    y_data = load_history_data(yesterday)
+    if not y_data:
+        lbl_diff.config(text="기준 없음", fg=GRAY)
+        return
+    matched = [sp for sp in y_data.get("spaces", []) if sp["name"] == s["name"]]
+    if not matched or matched[0]["peak"] == 0:
+        lbl_diff.config(text="기준 없음", fg=GRAY)
+        return
+    y_peak = matched[0]["peak"]
+    diff = today_peak - y_peak
+    pct = round(abs(diff) / y_peak * 100)
+    if diff > 0:
+        lbl_diff.config(text=f"↑ {pct}%", fg="#D85A30")
+    elif diff < 0:
+        lbl_diff.config(text=f"↓ {pct}%", fg="#1D9E75")
+    else:
+        lbl_diff.config(text="변동 없음", fg=GRAY)
 
 # 4. 실시간 그래프
 graph_card = tk.Frame(detail_frame, bg=CARD, padx=14, pady=10,
@@ -1800,8 +1836,63 @@ def show_history_detail(date_str):
     pie_title_lbl = tk.Label(pie_card, text="소음 단계별 비율  (전체 공간)",
         font=FONT, bg=CARD, fg=GRAY)
     pie_title_lbl.pack(anchor="w")
-    pie_chart_frame = tk.Frame(pie_card, bg=CARD)
-    pie_chart_frame.pack(anchor="w")
+
+    # 파이차트 + 증감 가로 배치
+    pie_content_row = tk.Frame(pie_card, bg=CARD)
+    pie_content_row.pack(fill="x")
+    pie_chart_frame = tk.Frame(pie_content_row, bg=CARD)
+    pie_chart_frame.pack(side="left", anchor="w")
+
+    # 전날 대비 증감 표시
+    diff_frame = tk.Frame(pie_content_row, bg=CARD, padx=16)
+    diff_frame.pack(side="left", anchor="center")
+
+    # 전날 날짜 데이터 로드
+    import datetime as _dt
+    selected_dt = _dt.datetime.strptime(date_str, "%Y-%m-%d").date()
+    prev_date_str = (selected_dt - _dt.timedelta(days=1)).strftime("%Y-%m-%d")
+    prev_data = load_history_data(prev_date_str)
+
+    tk.Label(diff_frame, text="전날 대비", font=FONT, bg=CARD, fg=GRAY).pack(anchor="w", pady=(0,6))
+
+    def get_diff_info(spaces_data, prev_d, sname=None):
+        """전날 대비 증감 계산"""
+        if not prev_d: return None, None, None
+        if sname:
+            cur = [s for s in spaces_data if s["name"] == sname]
+            prv = [s for s in prev_d.get("spaces", []) if s["name"] == sname]
+        else:
+            cur = spaces_data
+            prv = prev_d.get("spaces", [])
+        if not cur or not prv: return None, None, None
+        cur_peak = max(s["peak"] for s in cur) if cur else 0
+        prv_peak = max(s["peak"] for s in prv) if prv else 0
+        if prv_peak == 0: return None, None, None
+        diff = cur_peak - prv_peak
+        pct = round(abs(diff) / prv_peak * 100)
+        return diff, pct, prv_peak
+
+    diff_lbl = tk.Label(diff_frame, text="—", font=("Helvetica", 22, "bold"), bg=CARD, fg="#2C2C2A")
+    diff_lbl.pack(anchor="w")
+    diff_sub = tk.Label(diff_frame, text="", font=("Helvetica", 10), bg=CARD, fg=GRAY)
+    diff_sub.pack(anchor="w")
+
+    def update_diff_display(spaces_data, sname=None):
+        diff, pct, prv = get_diff_info(spaces_data, prev_data, sname)
+        if diff is None:
+            diff_lbl.config(text="기준 없음", fg=GRAY)
+            diff_sub.config(text="")
+        elif diff > 0:
+            diff_lbl.config(text=f"↑ {pct}%", fg="#D85A30")
+            diff_sub.config(text=f"전날 최고: {prv}")
+        elif diff < 0:
+            diff_lbl.config(text=f"↓ {pct}%", fg="#1D9E75")
+            diff_sub.config(text=f"전날 최고: {prv}")
+        else:
+            diff_lbl.config(text="변동 없음", fg=GRAY)
+            diff_sub.config(text=f"전날 최고: {prv}")
+
+    update_diff_display(data.get("spaces", []))
 
     def draw_pie(spaces_data, title="전체 공간"):
         for w in pie_chart_frame.winfo_children():
@@ -1858,6 +1949,7 @@ def show_history_detail(date_str):
                     frame.config(highlightthickness=2)
                     highlight_single(None)
                     draw_pie(data.get("spaces", []))  # 전체로 복귀
+                    update_diff_display(data.get("spaces", []))
                 else:
                     for w in hist_summary_frame.winfo_children():
                         w.config(highlightthickness=2)
@@ -1865,6 +1957,7 @@ def show_history_detail(date_str):
                     frame.config(highlightthickness=4)
                     highlight_single(sn)
                     draw_pie([space_data], sn)  # 선택 공간만
+                    update_diff_display([space_data], sn)
             return on_click
 
         click_fn = make_card_click()
@@ -1900,98 +1993,242 @@ weekly_title_lbl.pack(side="left")
 
 weekly_offset = [0]
 weekly_compare_offset = [None]  # 비교할 주 offset
+weekly_compare_monday = [None]  # 비교할 주 실제 월요일 날짜
+weekly_month_filter = [None]    # 현재 주 선택 시 해당 월 (달 기준 필터링용)
+weekly_compare_month_filter = [None]  # 비교 주 선택 시 해당 월
 
 def weekly_prev():
     weekly_offset[0] -= 1
+    weekly_compare_offset[0] = None
+    weekly_compare_monday[0] = None
+    weekly_compare_month_filter[0] = None
+    weekly_month_filter[0] = None
     refresh_weekly_tab()
 
 def weekly_next():
     weekly_offset[0] += 1
+    weekly_compare_offset[0] = None
+    weekly_compare_monday[0] = None
+    weekly_compare_month_filter[0] = None
+    weekly_month_filter[0] = None
     refresh_weekly_tab()
 
+weekly_select_popup_open = [False]
+
 def weekly_select_week():
-    """주 선택 팝업 - 데이터 있는 날짜 기준"""
+    if weekly_select_popup_open[0]:
+        return
+    weekly_select_popup_open[0] = True
     import datetime
     today = datetime.date.today()
-
     all_dates = load_history_list()
     available_years = sorted(set(d[:4] for d in all_dates), reverse=True)
     if not available_years:
         messagebox.showwarning("데이터 없음", "저장된 기록이 없어요!")
+        weekly_select_popup_open[0] = False
         return
 
     popup = tk.Toplevel(root)
     popup.title("주 선택")
-    popup.geometry("300x180")
+    popup.geometry("360x240")
     popup.configure(bg=BG)
     popup.resizable(False, False)
-    tk.Label(popup, text="년도와 월을 선택하세요", font=FONT_BOLD, bg=BG, fg="#2C2C2A").pack(pady=(14,10))
+    popup.protocol("WM_DELETE_WINDOW", lambda: [weekly_select_popup_open.__setitem__(0, False), popup.destroy()])
+    tk.Label(popup, text="년도와 월을 선택하세요", font=FONT_BOLD, bg=BG, fg="#2C2C2A").pack(pady=(14,8))
 
     sel_frame = tk.Frame(popup, bg=BG)
     sel_frame.pack()
 
-    # 년도 드롭다운 (데이터 있는 년도만)
     tk.Label(sel_frame, text="년도", font=FONT, bg=BG, fg=GRAY).grid(row=0, column=0, padx=(0,4))
     year_var = tk.StringVar(value=str(today.year) if str(today.year) in available_years else available_years[0])
     year_cb = ttk.Combobox(sel_frame, textvariable=year_var, values=available_years,
         width=7, font=FONT, state="readonly")
     year_cb.grid(row=0, column=1, padx=(0,16))
 
-    # 월 드롭다운
     tk.Label(sel_frame, text="월", font=FONT, bg=BG, fg=GRAY).grid(row=0, column=2, padx=(0,4))
     month_var = tk.StringVar(value=str(today.month))
-    months = [str(m) for m in range(1, 13)]
-    month_cb = ttk.Combobox(sel_frame, textvariable=month_var, values=months,
+    month_cb = ttk.Combobox(sel_frame, textvariable=month_var,
+        values=[str(m) for m in range(1, 13)],
         width=4, font=FONT, state="readonly")
     month_cb.grid(row=0, column=3)
 
-    def apply():
+    week_frame = tk.Frame(popup, bg=BG)
+    week_frame.pack(fill="x", padx=16, pady=(10,0))
+
+    def show_weeks(*args):
+        for w in week_frame.winfo_children():
+            w.destroy()
         try:
             y = int(year_var.get())
             m = int(month_var.get())
-            # 해당 년월에 데이터 있는지 확인
             prefix = f"{y}-{m:02d}"
-            has_data = any(d.startswith(prefix) for d in all_dates)
-            if not has_data:
-                messagebox.showwarning("데이터 없음", f"{y}년 {m}월에 저장된 기록이 없어요!")
+            if not any(d.startswith(prefix) for d in all_dates):
+                tk.Label(week_frame, text="해당 월에 데이터가 없어요",
+                    font=FONT, bg=BG, fg=GRAY).pack(anchor="w")
                 return
-            # 해당 월의 첫째 날 기준으로 주 offset 계산
-            target = datetime.date(y, m, 1)
+            if m == 12:
+                last_day = datetime.date(y+1,1,1) - datetime.timedelta(days=1)
+            else:
+                last_day = datetime.date(y,m+1,1) - datetime.timedelta(days=1)
+
+            # 해당 월의 날짜만 포함하는 주차 계산
+            first_day = datetime.date(y, m, 1)
             monday_this = today - datetime.timedelta(days=today.weekday())
-            monday_target = target - datetime.timedelta(days=target.weekday())
-            diff_weeks = (monday_target - monday_this).days // 7
-            weekly_offset[0] = diff_weeks
-            popup.destroy()
-            refresh_weekly_tab()
+
+            # 첫 주 월요일 찾기
+            w_monday = first_day - datetime.timedelta(days=first_day.weekday())
+            week_num = 1
+            seen_weeks = set()
+
+            while w_monday <= last_day:
+                w_sunday = w_monday + datetime.timedelta(days=6)
+                # 이 주에서 해당 월에 속하는 날짜 범위
+                month_start = max(w_monday, first_day)
+                month_end = min(w_sunday, last_day)
+
+                if month_start <= month_end and w_monday not in seen_weeks:
+                    seen_weeks.add(w_monday)
+                    diff = (w_monday - monday_this).days // 7
+                    label = f"{week_num}주차  ({month_start.strftime('%m/%d')}~{month_end.strftime('%m/%d')})"
+
+                    def go(o=diff, wm=w_monday, sel_m=m, sel_y=y):
+                        weekly_offset[0] = o
+                        weekly_month_filter[0] = (sel_y, sel_m)
+                        weekly_compare_offset[0] = None
+                        weekly_compare_monday[0] = None
+                        weekly_compare_month_filter[0] = None
+                        weekly_select_popup_open[0] = False
+                        popup.destroy()
+                        refresh_weekly_tab()
+
+                    tk.Button(week_frame, text=label, font=FONT,
+                        bg=CARD, fg="#2C2C2A",
+                        relief="flat", bd=0, padx=10, pady=3, cursor="hand2",
+                        command=go,
+                        highlightbackground=BORDER, highlightthickness=1).pack(fill="x", pady=2)
+                    week_num += 1
+
+                w_monday += datetime.timedelta(weeks=1)
         except ValueError:
             pass
 
-    tk.Button(popup, text="  선택  ", font=FONT_BOLD, bg="#185FA5", fg="#ffffff",
-        relief="flat", bd=0, padx=14, pady=6, cursor="hand2", command=apply,
-        highlightbackground="#185FA5", highlightthickness=1).pack(pady=(16,0))
+    year_var.trace("w", show_weeks)
+    month_var.trace("w", show_weeks)
+    show_weeks()
+
+weekly_compare_popup_open = [False]
 
 def weekly_compare():
-    """주 비교 팝업"""
+    if weekly_compare_popup_open[0]:
+        return
+    weekly_compare_popup_open[0] = True
     import datetime
+    today = datetime.date.today()
+    all_dates = load_history_list()
+    available_years = sorted(set(d[:4] for d in all_dates), reverse=True)
+    if not available_years:
+        messagebox.showwarning("데이터 없음", "저장된 기록이 없어요!")
+        weekly_compare_popup_open[0] = False
+        return
+
     popup = tk.Toplevel(root)
     popup.title("비교할 주 선택")
-    popup.geometry("320x160")
+    popup.geometry("360x240")
     popup.configure(bg=BG)
     popup.resizable(False, False)
-    tk.Label(popup, text="비교할 주를 선택하세요", font=FONT_BOLD, bg=BG, fg="#2C2C2A").pack(pady=(14,10))
-    btn_row = tk.Frame(popup, bg=BG)
-    btn_row.pack()
-    offsets = [("이번 주", 0), ("지난 주", -1), ("2주 전", -2), ("3주 전", -3)]
-    for label, offset in offsets:
-        if offset == weekly_offset[0]:
-            continue  # 현재 보고 있는 주는 제외
-        def go(o=offset, l=label):
-            weekly_compare_offset[0] = o
-            popup.destroy()
-            refresh_weekly_tab()
-        tk.Button(btn_row, text=label, font=FONT, bg=CARD, fg="#2C2C2A",
-            relief="flat", bd=0, padx=10, pady=4, cursor="hand2", command=go,
-            highlightbackground=BORDER, highlightthickness=1).pack(side="left", padx=4)
+    popup.protocol("WM_DELETE_WINDOW", lambda: [weekly_compare_popup_open.__setitem__(0, False), popup.destroy()])
+    tk.Label(popup, text="비교할 년도와 월을 선택하세요", font=FONT_BOLD, bg=BG, fg="#2C2C2A").pack(pady=(14,8))
+
+    sel_frame = tk.Frame(popup, bg=BG)
+    sel_frame.pack()
+
+    tk.Label(sel_frame, text="년도", font=FONT, bg=BG, fg=GRAY).grid(row=0, column=0, padx=(0,4))
+    year_var = tk.StringVar(value=str(today.year) if str(today.year) in available_years else available_years[0])
+    year_cb = ttk.Combobox(sel_frame, textvariable=year_var, values=available_years,
+        width=7, font=FONT, state="readonly")
+    year_cb.grid(row=0, column=1, padx=(0,16))
+
+    tk.Label(sel_frame, text="월", font=FONT, bg=BG, fg=GRAY).grid(row=0, column=2, padx=(0,4))
+    month_var = tk.StringVar(value=str(today.month))
+    month_cb = ttk.Combobox(sel_frame, textvariable=month_var,
+        values=[str(m) for m in range(1, 13)],
+        width=4, font=FONT, state="readonly")
+    month_cb.grid(row=0, column=3)
+
+    # 주차 버튼 영역
+    week_frame = tk.Frame(popup, bg=BG)
+    week_frame.pack(fill="x", padx=16, pady=(10,0))
+
+    def show_weeks(*args):
+        for w in week_frame.winfo_children():
+            w.destroy()
+        try:
+            y = int(year_var.get())
+            m = int(month_var.get())
+            prefix = f"{y}-{m:02d}"
+            if not any(d.startswith(prefix) for d in all_dates):
+                tk.Label(week_frame, text="해당 월에 데이터가 없어요",
+                    font=FONT, bg=BG, fg=GRAY).pack(anchor="w")
+                return
+
+            if m == 12:
+                last_day = datetime.date(y+1,1,1) - datetime.timedelta(days=1)
+            else:
+                last_day = datetime.date(y,m+1,1) - datetime.timedelta(days=1)
+
+            first_day = datetime.date(y, m, 1)
+            monday_this = today - datetime.timedelta(days=today.weekday()) + datetime.timedelta(weeks=weekly_offset[0])
+            w_monday = first_day - datetime.timedelta(days=first_day.weekday())
+            week_num = 1
+            seen_weeks = set()
+
+            while w_monday <= last_day:
+                w_sunday = w_monday + datetime.timedelta(days=6)
+                month_start = max(w_monday, first_day)
+                month_end = min(w_sunday, last_day)
+
+                if month_start <= month_end and w_monday not in seen_weeks:
+                    seen_weeks.add(w_monday)
+                    diff = (w_monday - monday_this).days // 7
+                    label = f"{week_num}주차  ({month_start.strftime('%m/%d')}~{month_end.strftime('%m/%d')})"
+
+                    def go(o=diff, wm=w_monday, sel_m=m, sel_y=y):
+                        if o == 0:
+                            messagebox.showwarning("같은 주", "현재 보고 있는 주와 같아요!\n다른 주를 선택해주세요.")
+                            return
+                        saved_space = active_weekly_space[0]
+                        weekly_compare_offset[0] = o
+                        weekly_compare_monday[0] = wm
+                        weekly_compare_month_filter[0] = (sel_y, sel_m)
+                        weekly_compare_popup_open[0] = False
+                        popup.destroy()
+                        refresh_weekly_tab()
+                        if saved_space and saved_space in weekly_btns:
+                            col = SPACE_COLORS[all_snames.index(saved_space) % len(SPACE_COLORS)] if saved_space in all_snames else color
+                            active_weekly_space[0] = saved_space
+                            weekly_btns[saved_space].config(bg=col, fg="#ffffff", highlightthickness=3)
+                            weekly_no_select_lbl.pack_forget()
+                            weekly_graph_card.pack(fill="x", padx=16, pady=(0,8))
+                            weekly_pie_card.pack(fill="x", padx=16, pady=(0,8))
+                            draw_weekly_graph(saved_space, col)
+
+                    is_current = (diff == 0)
+                    tk.Button(week_frame, text=label, font=FONT,
+                        bg="#E0DED6" if is_current else CARD,
+                        fg=GRAY if is_current else "#2C2C2A",
+                        relief="flat", bd=0, padx=10, pady=3,
+                        cursor="arrow" if is_current else "hand2",
+                        command=go,
+                        highlightbackground=BORDER, highlightthickness=1).pack(fill="x", pady=2)
+                    week_num += 1
+
+                w_monday += datetime.timedelta(weeks=1)
+        except ValueError:
+            pass
+
+    year_var.trace("w", show_weeks)
+    month_var.trace("w", show_weeks)
+    show_weeks()
 
 tk.Button(weekly_top, text="◀", font=FONT, bg=CARD, fg="#2C2C2A",
     relief="flat", bd=0, padx=8, pady=3, cursor="hand2", command=weekly_prev,
@@ -2061,31 +2298,86 @@ weekly_fig = [None]
 weekly_canvas_widget = [None]
 
 def draw_weekly_graph(sname, color):
-    """선택 공간의 해당 주 요일별 최고값 막대그래프"""
+    """선택 공간의 해당 주 날짜별 최고값 막대그래프 + 클릭 시 파이차트 변경"""
     for w in weekly_graph_inner.winfo_children():
         w.destroy()
     if weekly_fig[0]:
         plt.close(weekly_fig[0])
 
-    weekly_graph_lbl.config(text=f"{sname}  요일별 최고 소음값")
-
-    # 해당 주 날짜 계산
     import datetime
     today = datetime.date.today()
     monday = today - datetime.timedelta(days=today.weekday()) + datetime.timedelta(weeks=weekly_offset[0])
     week_dates = [(monday + datetime.timedelta(days=i)) for i in range(7)]
-    day_labels = ["월", "화", "수", "목", "금", "토", "일"]
+    # 현재 주 날짜 - 월 필터 적용
+    def filter_by_month(dates, month_filter):
+        if month_filter is None:
+            return dates
+        fy, fm = month_filter
+        return [d for d in dates if d.year == fy and d.month == fm]
 
-    # 날짜별 해당 공간 최고값 수집
+    filtered_week_dates = filter_by_month(week_dates, weekly_month_filter[0])
+    day_labels = [d.strftime("%m/%d") for d in filtered_week_dates]
+
+    # 현재 주 데이터
     vals = []
-    for d in week_dates:
+    for d in filtered_week_dates:
         d_str = d.strftime("%Y-%m-%d")
         d_data = load_history_data(d_str)
-        if not d_data:
-            vals.append(0)
-            continue
+        if not d_data: vals.append(0); continue
         matched = [s for s in d_data.get("spaces", []) if s["name"] == sname]
         vals.append(matched[0]["peak"] if matched else 0)
+
+    # 주차 레이블 생성 함수
+    def make_week_label(month_filter):
+        if month_filter is None:
+            return monday.strftime("%m/%d") + "주"
+        fy, fm = month_filter
+        # 해당 월에서 몇 번째 주인지 계산
+        first_day = datetime.date(fy, fm, 1)
+        w_mon = first_day - datetime.timedelta(days=first_day.weekday())
+        week_num = 1
+        cur_mon = monday if month_filter == weekly_month_filter[0] else (weekly_compare_monday[0] if weekly_compare_monday[0] else monday)
+        temp = first_day - datetime.timedelta(days=first_day.weekday())
+        while temp <= datetime.date(fy, fm, 28):
+            if temp == cur_mon:
+                break
+            temp += datetime.timedelta(weeks=1)
+            week_num += 1
+        return f"{fm}월 {week_num}주차"
+
+    # 현재 주 레이블
+    cur_label = make_week_label(weekly_month_filter[0])
+
+    # 비교 주 데이터
+    compare_vals = None
+    compare_dates = None
+    compare_label = None
+    if weekly_compare_offset[0] is not None and weekly_compare_monday[0] is not None:
+        cmp_monday = weekly_compare_monday[0]
+        compare_dates = [(cmp_monday + datetime.timedelta(days=i)) for i in range(7)]
+        compare_dates = filter_by_month(compare_dates, weekly_compare_month_filter[0])
+        compare_vals = []
+        for d in compare_dates:
+            d_str = d.strftime("%Y-%m-%d")
+            d_data = load_history_data(d_str)
+            if not d_data: compare_vals.append(0); continue
+            matched = [s for s in d_data.get("spaces", []) if s["name"] == sname]
+            compare_vals.append(matched[0]["peak"] if matched else 0)
+        # 비교 주 레이블
+        if weekly_compare_month_filter[0]:
+            fy2, fm2 = weekly_compare_month_filter[0]
+            first_day2 = datetime.date(fy2, fm2, 1)
+            temp2 = first_day2 - datetime.timedelta(days=first_day2.weekday())
+            wn2 = 1
+            while temp2 <= datetime.date(fy2, fm2, 28):
+                if temp2 == cmp_monday: break
+                temp2 += datetime.timedelta(weeks=1); wn2 += 1
+            compare_label = f"{fm2}월 {wn2}주차"
+        else:
+            compare_label = cmp_monday.strftime("%m/%d") + "주"
+        weekly_graph_lbl.config(text=f"{sname}  날짜별 최고 소음값 비교")
+    else:
+        weekly_graph_lbl.config(text=f"{sname}  날짜별 최고 소음값")
 
     fig_w, ax_w = plt.subplots(figsize=(7, 2.2))
     fig_w.patch.set_facecolor("#ffffff")
@@ -2096,20 +2388,68 @@ def draw_weekly_graph(sname, color):
     for sp in ["bottom","left"]: ax_w.spines[sp].set_color("#E0DED6")
     ax_w.set_ylabel("소음값", fontsize=9, color=GRAY)
 
-    bars = ax_w.bar(day_labels, vals, color=color, width=0.5, alpha=0.85)
+    weekday_names = ["월", "화", "수", "목", "금", "토", "일"]
+    CMP_COLOR = "#D85A30"
+    import numpy as np
+    x_arr = np.arange(7)
+    w = 0.35
 
-    # 오늘 날짜 강조 (이번 주일 때만)
-    if weekly_offset[0] == 0:
-        today_idx = today.weekday()
-        bars[today_idx].set_alpha(1.0)
-        bars[today_idx].set_edgecolor("#2C2C2A")
-        bars[today_idx].set_linewidth(2)
+    # 항상 월~일 7칸, 요일 인덱스 기준으로 배치
+    vals_7 = [0] * 7
+    for d, v in zip(filtered_week_dates, vals):
+        vals_7[d.weekday()] = v
 
-    # 막대 위에 값 표시
-    for bar, val in zip(bars, vals):
-        if val > 0:
-            ax_w.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 3,
-                str(val), ha="center", va="bottom", fontsize=9, color=GRAY)
+    cur_date_by_wd = {d.weekday(): d for d in filtered_week_dates}
+    cmp_date_by_wd = {d.weekday(): d for d in compare_dates} if compare_dates else {}
+
+    if compare_vals is not None:
+        cmp_vals_7 = [0] * 7
+        for d, v in zip(compare_dates, compare_vals):
+            cmp_vals_7[d.weekday()] = v
+
+        bars = ax_w.bar(x_arr - w/2, vals_7, w, color="#185FA5", alpha=0.85, label=cur_label)
+        bars_cmp = ax_w.bar(x_arr + w/2, cmp_vals_7, w, color=CMP_COLOR, alpha=0.85, label=compare_label)
+        ax_w.set_xticks(x_arr)
+        ax_w.set_xticklabels(weekday_names, fontsize=9, color=GRAY)
+        ax_w.legend(fontsize=8, loc="upper right")
+
+        for bar, val in zip(bars, vals_7):
+            if val > 0:
+                ax_w.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 3,
+                    str(val), ha="center", va="bottom", fontsize=7, color=GRAY)
+        for bar, val in zip(bars_cmp, cmp_vals_7):
+            if val > 0:
+                ax_w.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 3,
+                    str(val), ha="center", va="bottom", fontsize=7, color=GRAY)
+
+        # 날짜 라벨
+        for wd in range(7):
+            if wd in cur_date_by_wd:
+                ax_w.text(wd - w/2, -0.18, cur_date_by_wd[wd].strftime("%m/%d"),
+                    ha="center", va="top", fontsize=8, color="#185FA5",
+                    transform=ax_w.get_xaxis_transform())
+            if wd in cmp_date_by_wd:
+                ax_w.text(wd + w/2, -0.26, cmp_date_by_wd[wd].strftime("%m/%d"),
+                    ha="center", va="top", fontsize=8, color="#D85A30",
+                    transform=ax_w.get_xaxis_transform())
+    else:
+        bars = ax_w.bar(weekday_names, vals_7, color=color, width=0.5, alpha=0.85)
+        bars_cmp = None
+        if weekly_offset[0] == 0 and today.weekday() in cur_date_by_wd:
+            bars[today.weekday()].set_alpha(1.0)
+            bars[today.weekday()].set_edgecolor("#2C2C2A")
+            bars[today.weekday()].set_linewidth(2)
+        for bar, val in zip(bars, vals_7):
+            if val > 0:
+                ax_w.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 3,
+                    str(val), ha="center", va="bottom", fontsize=9, color=GRAY)
+
+        # 날짜 라벨
+        for wd in range(7):
+            if wd in cur_date_by_wd:
+                ax_w.text(wd, -0.18, cur_date_by_wd[wd].strftime("%m/%d"),
+                    ha="center", va="top", fontsize=8, color=GRAY,
+                    transform=ax_w.get_xaxis_transform())
 
     # 기준선
     thresh_colors_h = ["#1D9E75","#378ADD","#BA7517","#D85A30"]
@@ -2117,6 +2457,7 @@ def draw_weekly_graph(sname, color):
         ax_w.axhline(y=t, color=thresh_colors_h[i], linewidth=0.7, linestyle="--", alpha=0.5)
 
     fig_w.tight_layout()
+    fig_w.subplots_adjust(bottom=0.35)
     weekly_fig[0] = fig_w
 
     canvas_w = FigureCanvasTkAgg(fig_w, master=weekly_graph_inner)
@@ -2124,46 +2465,187 @@ def draw_weekly_graph(sname, color):
     canvas_w.draw()
     weekly_canvas_widget[0] = canvas_w
 
-    # 파이차트 - 해당 주 선택 공간 소음 단계별 비율
-    for w in weekly_pie_frame.winfo_children():
-        w.destroy()
-    weekly_pie_title.config(text=f"소음 단계별 비율  ({sname})")
+    selected_bar = [None]
+    pie_fn_ref = [None]      # draw_weekly_pie 참조 (나중에 저장)
+    pie_cmp_fn_ref = [None]  # draw_weekly_pie_compare_day 참조
 
-    # 해당 주 날짜의 피크 로그 수집
-    import datetime
-    today = datetime.date.today()
-    monday = today - datetime.timedelta(days=today.weekday()) + datetime.timedelta(weeks=weekly_offset[0])
-    week_dates = [(monday + datetime.timedelta(days=i)) for i in range(7)]
-    level_counts_w = [0] * 5
-    for d in week_dates:
-        d_str = d.strftime("%Y-%m-%d")
-        d_data = load_history_data(d_str)
-        if not d_data: continue
+    # 요일 버튼 - 균등 배치
+    btn_container = tk.Frame(weekly_graph_inner, bg=CARD)
+    btn_container.pack(fill="x", pady=(2,0))
+    date_btns_w = []
+
+    for wd in range(7):
+        wd_name = weekday_names[wd]
+        cur_d = cur_date_by_wd.get(wd)
+        cmp_d = cmp_date_by_wd.get(wd) if compare_vals is not None else None
+        has_data = (cur_d is not None) or (cmp_d is not None)
+
+        def on_click(wd_i=wd, cd=cur_d, cpd=cmp_d, wn=wd_name, hd=has_data):
+            if not hd:
+                messagebox.showinfo("데이터 없음", f"{wn}요일에 해당하는 데이터가 없어요!")
+                return
+            key = f"wd_{wd_i}"
+            if selected_bar[0] == key:
+                selected_bar[0] = None
+                for b in date_btns_w:
+                    b.config(
+                        bg="#E6F1FB" if b.cget("highlightbackground") == "#B5D4F4" else "#F0F0F0",
+                        fg="#185FA5" if b.cget("highlightbackground") == "#B5D4F4" else GRAY)
+                for w in weekly_pie_frame.winfo_children(): w.destroy()
+                weekly_pie_title.config(text="")
+                weekly_pie_card.pack_forget()
+            else:
+                selected_bar[0] = key
+                for b in date_btns_w:
+                    b.config(
+                        bg="#E6F1FB" if b.cget("highlightbackground") == "#B5D4F4" else "#F0F0F0",
+                        fg="#185FA5" if b.cget("highlightbackground") == "#B5D4F4" else GRAY)
+                date_btns_w[wd_i].config(bg="#185FA5", fg="#ffffff")
+                weekly_pie_card.pack(fill="x", padx=16, pady=(0,8))
+                if compare_vals is not None and pie_cmp_fn_ref[0]:
+                    pie_cmp_fn_ref[0](cd, cpd, wn)
+                elif cd and pie_fn_ref[0]:
+                    pie_fn_ref[0](cd.strftime("%Y-%m-%d"), wn)
+
+        f = tk.Frame(btn_container, bg=CARD)
+        f.pack(side="left", expand=True)
+        btn = tk.Button(f, text=wd_name,
+            font=("Helvetica", 9, "bold"),
+            bg="#E6F1FB" if has_data else "#F0F0F0",
+            fg="#185FA5" if has_data else GRAY,
+            relief="flat", bd=0, padx=6, pady=3, cursor="hand2",
+            command=on_click,
+            highlightbackground="#B5D4F4" if has_data else BORDER,
+            highlightthickness=1)
+        btn.pack()
+        date_btns_w.append(btn)
+
+    def draw_weekly_pie_compare_day(cur_d, cmp_d, wd_name):
+        """요일 선택 시 해당 요일 두 날짜 파이차트 나란히"""
+        for w in weekly_pie_frame.winfo_children():
+            w.destroy()
+        weekly_pie_title.config(text=f"소음 단계별 비율  ({sname} / {wd_name}요일)")
+
+        def get_day_logs(d):
+            if d is None: return []
+            d_data = load_history_data(d.strftime("%Y-%m-%d"))
+            if not d_data: return []
+            matched = [s for s in d_data.get("spaces", []) if s["name"] == sname]
+            return matched[0].get("peaks_log", []) if matched else []
+
+        def make_pie(parent, logs, title):
+            level_counts = [0] * 5
+            for log in logs:
+                level_counts[get_level(log["val"])] += 1
+            total = sum(level_counts)
+            tk.Label(parent, text=title, font=("Helvetica", 9), bg=CARD, fg=GRAY).pack(anchor="w")
+            if total > 0:
+                lp = [LEVELS[i]["name"] for i in range(5) if level_counts[i] > 0]
+                sp2 = [level_counts[i] for i in range(5) if level_counts[i] > 0]
+                cp = [LEVELS[i]["color"] for i in range(5) if level_counts[i] > 0]
+                fp, ap = plt.subplots(figsize=(3, 2.0))
+                fp.patch.set_facecolor("#ffffff")
+                ap.pie(sp2, labels=lp, colors=cp, autopct="%1.0f%%", startangle=90,
+                    textprops={"fontsize": 7, "color": "#2C2C2A"})
+                ap.axis("equal"); fp.tight_layout()
+                cv = FigureCanvasTkAgg(fp, master=parent)
+                cv.get_tk_widget().pack(); cv.draw(); plt.close(fp)
+            else:
+                tk.Label(parent, text="데이터 없음", font=FONT, bg=CARD, fg=GRAY).pack()
+
+        pie_row = tk.Frame(weekly_pie_frame, bg=CARD)
+        pie_row.pack(fill="x")
+        left = tk.Frame(pie_row, bg=CARD); left.pack(side="left", padx=(0,10))
+        right = tk.Frame(pie_row, bg=CARD); right.pack(side="left")
+        make_pie(left, get_day_logs(cur_d), cur_d.strftime("%m/%d") if cur_d else "—")
+        make_pie(right, get_day_logs(cmp_d), cmp_d.strftime("%m/%d") if cmp_d else "—")
+
+    def get_logs_from_dates(dates_list):
+        """날짜 리스트에서 해당 공간 피크 로그 수집"""
+        logs = []
+        for d in dates_list:
+            d_data = load_history_data(d.strftime("%Y-%m-%d"))
+            if not d_data: continue
+            matched = [s for s in d_data.get("spaces", []) if s["name"] == sname]
+            if matched: logs.extend(matched[0].get("peaks_log", []))
+        return logs
+
+    def get_logs_from_date(d):
+        """단일 날짜에서 해당 공간 피크 로그 수집"""
+        if d is None: return []
+        d_data = load_history_data(d.strftime("%Y-%m-%d"))
+        if not d_data: return []
         matched = [s for s in d_data.get("spaces", []) if s["name"] == sname]
-        if not matched: continue
-        for log in matched[0].get("peaks_log", []):
-            lv = get_level(log["val"])
-            level_counts_w[lv] += 1
+        return matched[0].get("peaks_log", []) if matched else []
 
-    total_w = sum(level_counts_w)
-    if total_w > 0:
-        labels_w = [LEVELS[i]["name"] for i in range(5) if level_counts_w[i] > 0]
-        sizes_w  = [level_counts_w[i] for i in range(5) if level_counts_w[i] > 0]
-        colors_w = [LEVELS[i]["color"] for i in range(5) if level_counts_w[i] > 0]
-        fig_wp, ax_wp = plt.subplots(figsize=(4, 2.2))
-        fig_wp.patch.set_facecolor("#ffffff")
-        ax_wp.pie(sizes_w, labels=labels_w, colors=colors_w,
-            autopct="%1.1f%%", startangle=90,
-            textprops={"fontsize": 8, "color": "#2C2C2A"})
-        ax_wp.axis("equal")
-        fig_wp.tight_layout()
-        canvas_wp = FigureCanvasTkAgg(fig_wp, master=weekly_pie_frame)
-        canvas_wp.get_tk_widget().pack()
-        canvas_wp.draw()
-        plt.close(fig_wp)
-    else:
-        tk.Label(weekly_pie_frame, text="측정 데이터가 없어요",
-            font=FONT, bg=CARD, fg=GRAY).pack(anchor="w")
+    def make_pie_chart(parent, logs, title):
+        """파이차트 그리기"""
+        level_counts = [0] * 5
+        for log in logs:
+            level_counts[get_level(log["val"])] += 1
+        total = sum(level_counts)
+        if title:
+            tk.Label(parent, text=title, font=("Helvetica", 9), bg=CARD, fg=GRAY).pack(anchor="w")
+        if total > 0:
+            lp = [LEVELS[i]["name"] for i in range(5) if level_counts[i] > 0]
+            sp = [level_counts[i] for i in range(5) if level_counts[i] > 0]
+            cp = [LEVELS[i]["color"] for i in range(5) if level_counts[i] > 0]
+            fp, ap = plt.subplots(figsize=(3, 2.0))
+            fp.patch.set_facecolor("#ffffff")
+            ap.pie(sp, labels=lp, colors=cp, autopct="%1.0f%%", startangle=90,
+                textprops={"fontsize": 7, "color": "#2C2C2A"})
+            ap.axis("equal"); fp.tight_layout()
+            cv = FigureCanvasTkAgg(fp, master=parent)
+            cv.get_tk_widget().pack(); cv.draw(); plt.close(fp)
+        else:
+            tk.Label(parent, text="데이터 없음", font=FONT, bg=CARD, fg=GRAY).pack()
+
+    def draw_weekly_pie(date_str=None, label=None):
+        """파이차트 그리기"""
+        for w in weekly_pie_frame.winfo_children(): w.destroy()
+        if compare_vals is not None:
+            # 비교 모드: 전체 주 데이터 두 개 나란히
+            weekly_pie_title.config(text=f"소음 단계별 비율  ({sname})")
+            pie_row = tk.Frame(weekly_pie_frame, bg=CARD)
+            pie_row.pack(fill="x")
+            left = tk.Frame(pie_row, bg=CARD); left.pack(side="left", padx=(0,10))
+            right = tk.Frame(pie_row, bg=CARD); right.pack(side="left")
+            make_pie_chart(left, get_logs_from_dates(filtered_week_dates), cur_label)
+            make_pie_chart(right, get_logs_from_dates(compare_dates), compare_label)
+        else:
+            # 단일 모드
+            if date_str:
+                # 요일 버튼 클릭: 해당 날짜 데이터
+                weekly_pie_title.config(text=f"소음 단계별 비율  ({sname} / {label})")
+                # 날짜로 요일 찾아서 cur_date_by_wd에서 실제 날짜 가져오기
+                import datetime as _dt
+                try:
+                    actual_date = _dt.datetime.strptime(date_str, "%Y-%m-%d").date()
+                    logs = get_logs_from_date(actual_date)
+                except:
+                    logs = []
+            else:
+                weekly_pie_title.config(text=f"소음 단계별 비율  ({sname} / {cur_label} 전체)")
+                logs = get_logs_from_dates(filtered_week_dates)
+            make_pie_chart(weekly_pie_frame, logs, "")
+
+    # 요일 버튼 클릭 시 해당 요일 두 날짜 파이차트
+    def draw_weekly_pie_compare_day_fn(cur_d, cmp_d, wd_name):
+        for w in weekly_pie_frame.winfo_children(): w.destroy()
+        weekly_pie_title.config(text=f"소음 단계별 비율  ({sname} / {wd_name}요일)")
+        pie_row = tk.Frame(weekly_pie_frame, bg=CARD)
+        pie_row.pack(fill="x")
+        left = tk.Frame(pie_row, bg=CARD); left.pack(side="left", padx=(0,10))
+        right = tk.Frame(pie_row, bg=CARD); right.pack(side="left")
+        make_pie_chart(left, get_logs_from_date(cur_d), cur_d.strftime("%m/%d") if cur_d else "—")
+        make_pie_chart(right, get_logs_from_date(cmp_d), cmp_d.strftime("%m/%d") if cmp_d else "—")
+
+    # 초기: 이번 주 전체 파이차트
+    draw_weekly_pie()
+
+    # 함수 참조 저장
+    pie_fn_ref[0] = draw_weekly_pie
+    pie_cmp_fn_ref[0] = draw_weekly_pie_compare_day_fn
 
 def refresh_weekly_tab():
     """주간 통계 탭 열 때 공간 카드 새로고침"""
@@ -2185,12 +2667,32 @@ def refresh_weekly_tab():
     today = datetime.date.today()
     monday = today - datetime.timedelta(days=today.weekday()) + datetime.timedelta(weeks=weekly_offset[0])
     sunday = monday + datetime.timedelta(days=6)
-    if weekly_offset[0] == 0:
-        weekly_title_lbl.config(text=f"이번 주 통계  ({monday.strftime('%m/%d')} ~ {sunday.strftime('%m/%d')})")
-    elif weekly_offset[0] == -1:
-        weekly_title_lbl.config(text=f"지난 주 통계  ({monday.strftime('%m/%d')} ~ {sunday.strftime('%m/%d')})")
+
+    # 월 필터 적용해서 타이틀 날짜 범위 계산
+    if weekly_month_filter[0]:
+        fy, fm = weekly_month_filter[0]
+        first_day = datetime.date(fy, fm, 1)
+        if fm == 12:
+            last_day = datetime.date(fy+1, 1, 1) - datetime.timedelta(days=1)
+        else:
+            last_day = datetime.date(fy, fm+1, 1) - datetime.timedelta(days=1)
+        disp_start = max(monday, first_day)
+        disp_end = min(sunday, last_day)
+
+        # 몇 주차인지 계산
+        temp = first_day - datetime.timedelta(days=first_day.weekday())
+        wn = 1
+        while temp < monday:
+            temp += datetime.timedelta(weeks=1)
+            wn += 1
+        weekly_title_lbl.config(text=f"{fm}월 {wn}주차 통계  ({disp_start.strftime('%m/%d')} ~ {disp_end.strftime('%m/%d')})")
     else:
-        weekly_title_lbl.config(text=f"{abs(weekly_offset[0])}주 {'전' if weekly_offset[0] < 0 else '후'} 통계  ({monday.strftime('%m/%d')} ~ {sunday.strftime('%m/%d')})")
+        if weekly_offset[0] == 0:
+            weekly_title_lbl.config(text=f"이번 주 통계  ({monday.strftime('%m/%d')} ~ {sunday.strftime('%m/%d')})")
+        elif weekly_offset[0] == -1:
+            weekly_title_lbl.config(text=f"지난 주 통계  ({monday.strftime('%m/%d')} ~ {sunday.strftime('%m/%d')})")
+        else:
+            weekly_title_lbl.config(text=f"{abs(weekly_offset[0])}주 {'전' if weekly_offset[0] < 0 else '후'} 통계  ({monday.strftime('%m/%d')} ~ {sunday.strftime('%m/%d')})")
 
 
 
@@ -2247,15 +2749,12 @@ def refresh_weekly_tab():
                 draw_weekly_graph(sn, col)
             return on_click
 
-        btn_w = tk.Frame(weekly_card_frame, bg=CARD, highlightbackground=color,
-            highlightthickness=1, cursor="hand2")
-        btn_w.pack(side="left", padx=(0,10), ipadx=12, ipady=8)
-        tk.Label(btn_w, text=sname, font=FONT_BOLD, bg=CARD, fg=color).pack(padx=8, pady=(6,2))
-
-        click_fn = make_click()
-        btn_w.bind("<Button-1>", click_fn)
-        for child in btn_w.winfo_children():
-            child.bind("<Button-1>", click_fn)
+        btn_w = tk.Button(weekly_card_frame, text=sname, font=FONT_BOLD,
+            bg=CARD, fg=color, relief="flat", bd=0,
+            padx=12, pady=8, cursor="hand2",
+            command=make_click(),
+            highlightbackground=color, highlightthickness=1)
+        btn_w.pack(side="left", padx=(0,8))
         weekly_btns[sname] = btn_w
 
     # 이전에 선택된 공간이 있으면 자동 선택
@@ -2279,13 +2778,20 @@ monthly_compare_offset = [None]
 
 def monthly_prev():
     monthly_offset[0] -= 1
+    monthly_compare_offset[0] = None
     refresh_monthly_tab()
 
 def monthly_next():
     monthly_offset[0] += 1
+    monthly_compare_offset[0] = None
     refresh_monthly_tab()
 
+monthly_select_popup_open = [False]
+
 def monthly_select_month():
+    if monthly_select_popup_open[0]:
+        return
+    monthly_select_popup_open[0] = True
     """월 직접 선택 팝업 - 데이터 있는 년도만 표시"""
     import datetime
     today = datetime.date.today()
@@ -2302,6 +2808,7 @@ def monthly_select_month():
     popup.geometry("300x180")
     popup.configure(bg=BG)
     popup.resizable(False, False)
+    popup.protocol("WM_DELETE_WINDOW", lambda: [monthly_select_popup_open.__setitem__(0, False), popup.destroy()])
     tk.Label(popup, text="년도와 월을 선택하세요", font=FONT_BOLD, bg=BG, fg="#2C2C2A").pack(pady=(14,10))
 
     sel_frame = tk.Frame(popup, bg=BG)
@@ -2334,6 +2841,8 @@ def monthly_select_month():
                 return
             diff = (y - today.year) * 12 + (m - today.month)
             monthly_offset[0] = diff
+            monthly_compare_offset[0] = None
+            monthly_select_popup_open[0] = False
             popup.destroy()
             refresh_monthly_tab()
         except ValueError:
@@ -2343,27 +2852,78 @@ def monthly_select_month():
         relief="flat", bd=0, padx=14, pady=6, cursor="hand2", command=apply,
         highlightbackground="#185FA5", highlightthickness=1).pack(pady=(16,0))
 
+monthly_compare_popup_open = [False]
+
 def monthly_compare():
-    """월 비교 팝업"""
+    if monthly_compare_popup_open[0]:
+        return
+    monthly_compare_popup_open[0] = True
+    import datetime
+    today = datetime.date.today()
+    all_dates = load_history_list()
+    available_years = sorted(set(d[:4] for d in all_dates), reverse=True)
+    if not available_years:
+        messagebox.showwarning("데이터 없음", "저장된 기록이 없어요!")
+        monthly_compare_popup_open[0] = False
+        return
+
     popup = tk.Toplevel(root)
     popup.title("비교할 월 선택")
-    popup.geometry("340x160")
+    popup.geometry("300x180")
     popup.configure(bg=BG)
     popup.resizable(False, False)
-    tk.Label(popup, text="비교할 월을 선택하세요", font=FONT_BOLD, bg=BG, fg="#2C2C2A").pack(pady=(14,10))
-    btn_row = tk.Frame(popup, bg=BG)
-    btn_row.pack()
-    offsets = [("이번 달", 0), ("지난 달", -1), ("2달 전", -2), ("3달 전", -3)]
-    for label, offset in offsets:
-        if offset == monthly_offset[0]:
-            continue
-        def go(o=offset):
-            monthly_compare_offset[0] = o
+    popup.protocol("WM_DELETE_WINDOW", lambda: [monthly_compare_popup_open.__setitem__(0, False), popup.destroy()])
+    tk.Label(popup, text="비교할 년도와 월을 선택하세요", font=FONT_BOLD, bg=BG, fg="#2C2C2A").pack(pady=(14,10))
+
+    sel_frame = tk.Frame(popup, bg=BG)
+    sel_frame.pack()
+
+    tk.Label(sel_frame, text="년도", font=FONT, bg=BG, fg=GRAY).grid(row=0, column=0, padx=(0,4))
+    year_var = tk.StringVar(value=str(today.year) if str(today.year) in available_years else available_years[0])
+    year_cb = ttk.Combobox(sel_frame, textvariable=year_var, values=available_years,
+        width=7, font=FONT, state="readonly")
+    year_cb.grid(row=0, column=1, padx=(0,16))
+
+    tk.Label(sel_frame, text="월", font=FONT, bg=BG, fg=GRAY).grid(row=0, column=2, padx=(0,4))
+    month_var = tk.StringVar(value=str(today.month))
+    month_cb = ttk.Combobox(sel_frame, textvariable=month_var,
+        values=[str(m) for m in range(1, 13)],
+        width=4, font=FONT, state="readonly")
+    month_cb.grid(row=0, column=3)
+
+    def apply():
+        try:
+            y = int(year_var.get())
+            m = int(month_var.get())
+            prefix = f"{y}-{m:02d}"
+            if not any(d.startswith(prefix) for d in all_dates):
+                messagebox.showwarning("데이터 없음", f"{y}년 {m}월에 저장된 기록이 없어요!")
+                return
+            diff = (y - today.year) * 12 + (m - today.month)
+            if diff == monthly_offset[0]:
+                messagebox.showwarning("같은 달", "현재 보고 있는 달과 같아요!\n다른 달을 선택해주세요.")
+                return
+            monthly_compare_offset[0] = diff
+            saved_space = active_monthly_space[0]
+            monthly_compare_popup_open[0] = False
             popup.destroy()
             refresh_monthly_tab()
-        tk.Button(btn_row, text=label, font=FONT, bg=CARD, fg="#2C2C2A",
-            relief="flat", bd=0, padx=10, pady=4, cursor="hand2", command=go,
-            highlightbackground=BORDER, highlightthickness=1).pack(side="left", padx=4)
+            # 팝업 닫힌 후 공간 다시 선택
+            if saved_space and saved_space in monthly_btns:
+                i = all_snames.index(saved_space) if saved_space in all_snames else 0
+                col = SPACE_COLORS[i % len(SPACE_COLORS)]
+                active_monthly_space[0] = saved_space
+                monthly_btns[saved_space].config(highlightthickness=3)
+                monthly_no_select_lbl.pack_forget()
+                monthly_graph_card.pack(fill="x", padx=16, pady=(0,8))
+                monthly_pie_card.pack(fill="x", padx=16, pady=(0,8))
+                draw_monthly_graph(saved_space, col)
+        except ValueError:
+            pass
+
+    tk.Button(popup, text="  선택  ", font=FONT_BOLD, bg="#185FA5", fg="#ffffff",
+        relief="flat", bd=0, padx=14, pady=6, cursor="hand2", command=apply,
+        highlightbackground="#185FA5", highlightthickness=1).pack(pady=(16,0))
 
 tk.Button(monthly_top, text="◀", font=FONT, bg=CARD, fg="#2C2C2A",
     relief="flat", bd=0, padx=8, pady=3, cursor="hand2", command=monthly_prev,
@@ -2431,59 +2991,64 @@ monthly_fig = [None]
 
 def draw_monthly_graph(sname, color):
     import datetime
+    import numpy as np
     for w in monthly_graph_inner.winfo_children():
         w.destroy()
     if monthly_fig[0]:
         plt.close(monthly_fig[0])
-    monthly_graph_lbl.config(text=f"{sname}  주차별 평균 소음값")
     today = datetime.date.today()
     month = today.month + monthly_offset[0]
     year = today.year
-    while month < 1:
-        month += 12; year -= 1
-    while month > 12:
-        month -= 12; year += 1
+    while month < 1: month += 12; year -= 1
+    while month > 12: month -= 12; year += 1
     if month == 12:
         last_day = datetime.date(year+1, 1, 1) - datetime.timedelta(days=1)
     else:
         last_day = datetime.date(year, month+1, 1) - datetime.timedelta(days=1)
 
-    # 실제 주차 수에 맞게 동적으로 생성 (7일 단위)
-    week_ranges = []
-    week_labels = []
-    d = datetime.date(year, month, 1)
-    week_num = 1
-    while d <= last_day:
-        w_end = min(d + datetime.timedelta(days=6), last_day)
-        week_ranges.append((d, w_end))
-        week_labels.append(f"{week_num}주차")
-        d = w_end + datetime.timedelta(days=1)
-        week_num += 1
+    def get_week_ranges(y, m):
+        if m == 12:
+            ld = datetime.date(y+1, 1, 1) - datetime.timedelta(days=1)
+        else:
+            ld = datetime.date(y, m+1, 1) - datetime.timedelta(days=1)
+        ranges = []; labels = []; d = datetime.date(y, m, 1); n = 1
+        while d <= ld:
+            w_end = min(d + datetime.timedelta(days=6), ld)
+            ranges.append((d, w_end)); labels.append(f"{n}주차")
+            d = w_end + datetime.timedelta(days=1); n += 1
+        return ranges, labels
 
-    avgs = []
-    for w_start, w_end in week_ranges:
-        week_vals = []
-        d = w_start
-        while d <= w_end:
-            d_str = d.strftime("%Y-%m-%d")
-            d_data = load_history_data(d_str)
-            if d_data:
-                matched = [s for s in d_data.get("spaces", []) if s["name"] == sname]
-                if matched:
-                    logs = matched[0].get("peaks_log", [])
-                    vals = [l["val"] for l in logs]
-                    if vals:
-                        week_vals.extend(vals)
-            d += datetime.timedelta(days=1)
-        avgs.append(round(sum(week_vals) / len(week_vals)) if week_vals else 0)
+    def get_avgs(ranges):
+        avgs = []
+        for w_start, w_end in ranges:
+            wvals = []; d = w_start
+            while d <= w_end:
+                dd = load_history_data(d.strftime("%Y-%m-%d"))
+                if dd:
+                    matched = [s for s in dd.get("spaces", []) if s["name"] == sname]
+                    if matched:
+                        wvals.extend([l["val"] for l in matched[0].get("peaks_log", [])])
+                d += datetime.timedelta(days=1)
+            avgs.append(round(sum(wvals)/len(wvals)) if wvals else 0)
+        return avgs
 
-    # 현재 주차 계산 (이번 달일 때만)
-    current_week_idx = None
-    if monthly_offset[0] == 0:
-        for i, (w_start, w_end) in enumerate(week_ranges):
-            if w_start <= today <= w_end:
-                current_week_idx = i
-                break
+    week_ranges, week_labels = get_week_ranges(year, month)
+    avgs = get_avgs(week_ranges)
+
+    # 비교 달 데이터
+    cmp_avgs = None
+    cmp_label = None
+    if monthly_compare_offset[0] is not None:
+        cm = today.month + monthly_compare_offset[0]
+        cy = today.year
+        while cm < 1: cm += 12; cy -= 1
+        while cm > 12: cm -= 12; cy += 1
+        cmp_ranges, _ = get_week_ranges(cy, cm)
+        cmp_avgs = get_avgs(cmp_ranges)
+        cmp_label = f"{cy}-{cm:02d}"
+        monthly_graph_lbl.config(text=f"{sname}  주차별 평균 소음값 비교")
+    else:
+        monthly_graph_lbl.config(text=f"{sname}  주차별 평균 소음값")
 
     fig_m, ax_m = plt.subplots(figsize=(7, 2.2))
     fig_m.patch.set_facecolor("#ffffff")
@@ -2493,15 +3058,41 @@ def draw_monthly_graph(sname, color):
     for sp in ["top","right"]: ax_m.spines[sp].set_visible(False)
     for sp in ["bottom","left"]: ax_m.spines[sp].set_color("#E0DED6")
     ax_m.set_ylabel("평균 소음값", fontsize=9, color=GRAY)
-    bars = ax_m.bar(week_labels, avgs, color=color, width=0.5, alpha=0.85)
-    if current_week_idx is not None:
-        bars[current_week_idx].set_alpha(1.0)
-        bars[current_week_idx].set_edgecolor("#2C2C2A")
-        bars[current_week_idx].set_linewidth(2)
-    for bar, avg in zip(bars, avgs):
-        if avg > 0:
-            ax_m.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 3,
-                str(avg), ha="center", va="bottom", fontsize=9, color=GRAY)
+    CMP_COLOR = "#D85A30"
+
+    if cmp_avgs is not None:
+        max_weeks = max(len(avgs), len(cmp_avgs))
+        avgs_pad = avgs + [0] * (max_weeks - len(avgs))
+        cmp_pad  = cmp_avgs + [0] * (max_weeks - len(cmp_avgs))
+        labels_pad = week_labels + [f"{i+1}주차" for i in range(len(week_labels), max_weeks)]
+        x_arr = np.arange(max_weeks)
+        w = 0.35
+        bars = ax_m.bar(x_arr - w/2, avgs_pad, w, color="#185FA5", alpha=0.85,
+            label=f"{year}-{month:02d}")
+        bars_c = ax_m.bar(x_arr + w/2, cmp_pad, w, color="#D85A30", alpha=0.85,
+            label=cmp_label)
+        ax_m.set_xticks(x_arr)
+        ax_m.set_xticklabels(labels_pad, fontsize=8, color=GRAY)
+        ax_m.legend(fontsize=8, loc="upper right")
+        for bar, v in list(zip(bars, avgs_pad)) + list(zip(bars_c, cmp_pad)):
+            if v > 0:
+                ax_m.text(bar.get_x()+bar.get_width()/2, bar.get_height()+3,
+                    str(v), ha="center", va="bottom", fontsize=7, color=GRAY)
+    else:
+        current_week_idx = None
+        if monthly_offset[0] == 0:
+            for i, (ws, we) in enumerate(week_ranges):
+                if ws <= today <= we: current_week_idx = i; break
+        bars = ax_m.bar(week_labels, avgs, color=color, width=0.5, alpha=0.85)
+        if current_week_idx is not None:
+            bars[current_week_idx].set_alpha(1.0)
+            bars[current_week_idx].set_edgecolor("#2C2C2A")
+            bars[current_week_idx].set_linewidth(2)
+        for bar, avg in zip(bars, avgs):
+            if avg > 0:
+                ax_m.text(bar.get_x()+bar.get_width()/2, bar.get_height()+3,
+                    str(avg), ha="center", va="bottom", fontsize=9, color=GRAY)
+
     thresh_colors_h = ["#1D9E75","#378ADD","#BA7517","#D85A30"]
     for i, t in enumerate(thresholds):
         ax_m.axhline(y=t, color=thresh_colors_h[i], linewidth=0.7, linestyle="--", alpha=0.5)
@@ -2511,54 +3102,53 @@ def draw_monthly_graph(sname, color):
     canvas_m.get_tk_widget().pack(fill="x")
     canvas_m.draw()
 
-    # 파이차트 - 해당 월 선택 공간 소음 단계별 비율
+    # 파이차트 두 개 나란히 (비교 시) 또는 하나 (단일 시)
     for w in monthly_pie_frame.winfo_children():
         w.destroy()
-    monthly_pie_title.config(text=f"소음 단계별 비율  ({sname})")
 
-    import datetime
-    today = datetime.date.today()
-    month2 = today.month + monthly_offset[0]
-    year2 = today.year
-    while month2 < 1: month2 += 12; year2 -= 1
-    while month2 > 12: month2 -= 12; year2 += 1
-    if month2 == 12:
-        last_day2 = datetime.date(year2+1, 1, 1) - datetime.timedelta(days=1)
+    def get_month_logs(y, m):
+        if m == 12: ld = datetime.date(y+1,1,1)-datetime.timedelta(days=1)
+        else: ld = datetime.date(y,m+1,1)-datetime.timedelta(days=1)
+        logs = []; d = datetime.date(y,m,1)
+        while d <= ld:
+            dd = load_history_data(d.strftime("%Y-%m-%d"))
+            if dd:
+                matched = [s for s in dd.get("spaces",[]) if s["name"]==sname]
+                if matched: logs.extend(matched[0].get("peaks_log",[]))
+            d += datetime.timedelta(days=1)
+        return logs
+
+    def make_pie_m(parent, logs, title):
+        level_counts = [0]*5
+        for log in logs:
+            level_counts[get_level(log["val"])] += 1
+        total = sum(level_counts)
+        tk.Label(parent, text=title, font=("Helvetica",9), bg=CARD, fg=GRAY).pack(anchor="w")
+        if total > 0:
+            lp = [LEVELS[i]["name"] for i in range(5) if level_counts[i]>0]
+            sp2 = [level_counts[i] for i in range(5) if level_counts[i]>0]
+            cp = [LEVELS[i]["color"] for i in range(5) if level_counts[i]>0]
+            fp, ap = plt.subplots(figsize=(3,2.0))
+            fp.patch.set_facecolor("#ffffff")
+            ap.pie(sp2,labels=lp,colors=cp,autopct="%1.0f%%",startangle=90,
+                textprops={"fontsize":7,"color":"#2C2C2A"})
+            ap.axis("equal"); fp.tight_layout()
+            cv = FigureCanvasTkAgg(fp, master=parent)
+            cv.get_tk_widget().pack(); cv.draw(); plt.close(fp)
+        else:
+            tk.Label(parent,text="데이터 없음",font=FONT,bg=CARD,fg=GRAY).pack()
+
+    if cmp_avgs is not None:
+        monthly_pie_title.config(text=f"소음 단계별 비율  ({sname})")
+        pie_row = tk.Frame(monthly_pie_frame, bg=CARD)
+        pie_row.pack(fill="x")
+        left = tk.Frame(pie_row, bg=CARD); left.pack(side="left", padx=(0,10))
+        right = tk.Frame(pie_row, bg=CARD); right.pack(side="left")
+        make_pie_m(left, get_month_logs(year, month), f"{year}-{month:02d}")
+        make_pie_m(right, get_month_logs(cy, cm), cmp_label)
     else:
-        last_day2 = datetime.date(year2, month2+1, 1) - datetime.timedelta(days=1)
-
-    level_counts_m = [0] * 5
-    d = datetime.date(year2, month2, 1)
-    while d <= last_day2:
-        d_str = d.strftime("%Y-%m-%d")
-        d_data = load_history_data(d_str)
-        if d_data:
-            matched = [s for s in d_data.get("spaces", []) if s["name"] == sname]
-            if matched:
-                for log in matched[0].get("peaks_log", []):
-                    lv = get_level(log["val"])
-                    level_counts_m[lv] += 1
-        d += datetime.timedelta(days=1)
-
-    total_m = sum(level_counts_m)
-    if total_m > 0:
-        labels_m2 = [LEVELS[i]["name"] for i in range(5) if level_counts_m[i] > 0]
-        sizes_m2  = [level_counts_m[i] for i in range(5) if level_counts_m[i] > 0]
-        colors_m2 = [LEVELS[i]["color"] for i in range(5) if level_counts_m[i] > 0]
-        fig_mp, ax_mp = plt.subplots(figsize=(4, 2.2))
-        fig_mp.patch.set_facecolor("#ffffff")
-        ax_mp.pie(sizes_m2, labels=labels_m2, colors=colors_m2,
-            autopct="%1.1f%%", startangle=90,
-            textprops={"fontsize": 8, "color": "#2C2C2A"})
-        ax_mp.axis("equal")
-        fig_mp.tight_layout()
-        canvas_mp = FigureCanvasTkAgg(fig_mp, master=monthly_pie_frame)
-        canvas_mp.get_tk_widget().pack()
-        canvas_mp.draw()
-        plt.close(fig_mp)
-    else:
-        tk.Label(monthly_pie_frame, text="측정 데이터가 없어요",
-            font=FONT, bg=CARD, fg=GRAY).pack(anchor="w")
+        monthly_pie_title.config(text=f"소음 단계별 비율  ({sname})")
+        make_pie_m(monthly_pie_frame, get_month_logs(year, month), f"{year}-{month:02d}")
 
 def refresh_monthly_tab():
     import datetime
@@ -2717,6 +3307,7 @@ def animate(frame):
     lbl_peak_time.config(text=s["peak_time"] if s["count"] > 0 else "—")
     lbl_peak.config(text=str(s["peak"]) if s["count"] > 0 else "—")
     lbl_time.config(text=time.strftime("%H:%M:%S"))
+    update_diff_label()
 
     # 그래프 업데이트
     y = list(s["data"])
@@ -2749,6 +3340,7 @@ def check_new_day():
     if new_today != today_str:
         save_history()   # 하루치 데이터 히스토리에 저장
         today_str = new_today
+        date_lbl.config(text=today_str)
         tick = 0
         for s in spaces:
             s["data"].extend([0]*MAX_POINTS)
